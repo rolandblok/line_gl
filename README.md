@@ -32,9 +32,10 @@ Y axis is flipped on final output to match SVG coordinate system (Y-down).
 - [ ] Step 6 — Hidden-line removal
   - [x] 6a — Interval set: manage visible sub-ranges of [0,1] on a line segment
   - [x] 6b — 2D geometry helpers: segment intersection, point-in-triangle
-  - [ ] 6c — Depth interpolation: NDC depth along a segment and inside a triangle
-  - [ ] 6d — Per-triangle occlusion: find the interval a triangle occludes on a line
-  - [ ] 6e — Full pipeline: apply all triangles to all lines, output visible sub-segments
+  - [x] 6c — Depth interpolation: NDC depth along a segment and inside a triangle
+  - [x] 6d — Per-triangle occlusion: find the interval a triangle occludes on a line
+  - [x] 6e — Full pipeline: apply all triangles to all lines, output visible sub-segments
+- [x] Step 6 — Hidden-line removal
 - [ ] Step 7 — TBD after step 6
 
 ## Build

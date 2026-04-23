@@ -7,6 +7,9 @@
 #include "camera.h"
 #include "interval.h"
 #include "geom2d.h"
+#include "depth.h"
+#include "occlusion.h"
+#include "hidden_line.h"
 
 static int passed = 0, failed = 0;
 
@@ -194,6 +197,102 @@ int main() {
     check("outside triangle",           !point_in_triangle_2d({0.75f,0.75f}, ta, tb, tc));
     check("on edge counts as inside",    point_in_triangle_2d({0.5f,0.0f},   ta, tb, tc));
     check("at vertex counts as inside",  point_in_triangle_2d({0,0},         ta, tb, tc));
+
+    std::cout << "\n=== Depth ===\n";
+
+    // Camera at (0,0,5) looking at origin, point at origin
+    Camera dcam;
+    Mat4 dmvp = dcam.mvp(1.0f);
+
+    // Origin is between near and far, depth should be in (-1, 1)
+    float d0 = ndc_depth({0,0,0}, dmvp);
+    check("origin depth in NDC range", d0 > -1.0f && d0 < 1.0f);
+
+    // Point behind camera returns 1.0 (far)
+    float dbehind = ndc_depth({0,0,10}, dmvp);
+    check("behind camera depth==1",    near(dbehind, 1.0f));
+
+    // depth_at_t: midpoint of segment from (0,0,0) to (0,0,-2) == depth of (0,0,-1)
+    float dt  = depth_at_t({0,0,0}, {0,0,-2}, 0.5f, dmvp);
+    float dm  = ndc_depth({0,0,-1}, dmvp);
+    check("depth_at_t midpoint",       near(dt, dm));
+
+    // barycentric_2d: centroid has coords (1/3, 1/3, 1/3)
+    Vec2 ba{0,0}, bb{1,0}, bc{0,1};
+    Vec2 centroid{1.0f/3.0f, 1.0f/3.0f};
+    float bu, bv, bw;
+    bool bary_ok = barycentric_2d(centroid, ba, bb, bc, bu, bv, bw);
+    check("barycentric centroid ok",   bary_ok);
+    check("barycentric u==1/3",        near(bu, 1.0f/3.0f));
+    check("barycentric v==1/3",        near(bv, 1.0f/3.0f));
+    check("barycentric w==1/3",        near(bw, 1.0f/3.0f));
+
+    // triangle_depth_at: at vertex a the depth should equal da
+    float tri_d = triangle_depth_at(ba, ba, bb, bc, 0.2f, 0.5f, 0.8f);
+    check("depth at vertex a == da",   near(tri_d, 0.2f));
+
+    std::cout << "\n=== Occlusion ===\n";
+
+    // Setup: camera at (0,0,5) looking at origin, 800x600 viewport
+    const float OW = 800.0f, OH = 600.0f;
+    Camera ocam;
+    Mat4 omvp = ocam.mvp(OW / OH);
+
+    // Large triangle at z=0 (closer to camera than the line below)
+    Triangle3D big_tri{{-5,-5,0},{5,-5,0},{0,5,0}};
+
+    // Line at z=-2 (behind the triangle) passing through the triangle center
+    Vec3 LP{-1, 0, -2}, LQ{1, 0, -2};
+    auto occ = triangle_occlusion(LP, LQ, big_tri, omvp, OW, OH);
+    check("behind triangle: occluded",          !occ.empty());
+
+    // Same line but now the triangle is at z=-4 (behind the line) — no occlusion
+    Triangle3D far_tri{{-5,-5,-4},{5,-5,-4},{0,5,-4}};
+    auto occ2 = triangle_occlusion(LP, LQ, far_tri, omvp, OW, OH);
+    check("triangle behind line: not occluded", occ2.empty());
+
+    // Line entirely to the side of the big triangle — no occlusion
+    Vec3 SP{-10, 0, -2}, SQ{-8, 0, -2};
+    auto occ3 = triangle_occlusion(SP, SQ, big_tri, omvp, OW, OH);
+    check("line beside triangle: not occluded", occ3.empty());
+
+    // Partially occluded: line crosses triangle boundary
+    Vec3 HP{-10, 0, -2}, HQ{0, 0, -2};  // starts outside, ends at center
+    auto occ4 = triangle_occlusion(HP, HQ, big_tri, omvp, OW, OH);
+    check("partial occlusion: interval found",  !occ4.empty());
+    if (!occ4.empty()) {
+        check("partial: t0 > 0",  occ4[0].t0 > 0.0f);
+        check("partial: t1 == 1", near(occ4[0].t1, 1.0f));
+    }
+
+    std::cout << "\n=== Hidden Line Removal ===\n";
+
+    const float HW = 800.0f, HH = 600.0f;
+    Camera hcam;
+    Mat4 hmvp = hcam.mvp(HW / HH);
+
+    // Scene: one line behind a large triangle that fully covers it
+    Scene hs;
+    hs.add_line({-1, 0, -2}, {1, 0, -2});
+    hs.add_triangle({-5,-5,0},{5,-5,0},{0,5,0});
+
+    auto fully_hidden = hidden_line_removal(hs, hmvp, HW, HH);
+    check("fully hidden: no segments",  fully_hidden.empty());
+
+    // Scene: one line in front of a triangle — fully visible
+    Scene hs2;
+    hs2.add_line({-1, 0, 2}, {1, 0, 2});
+    hs2.add_triangle({-5,-5,0},{5,-5,0},{0,5,0});
+
+    auto fully_visible = hidden_line_removal(hs2, hmvp, HW, HH);
+    check("fully visible: one segment", fully_visible.size() == 1);
+
+    // Scene: no triangles — all lines pass through unchanged
+    Scene hs3;
+    hs3.add_line({-1, 0, 0}, {1, 0, 0});
+    hs3.add_line({0, -1, 0}, {0, 1, 0});
+    auto no_occluders = hidden_line_removal(hs3, hmvp, HW, HH);
+    check("no occluders: 2 segments",   no_occluders.size() == 2);
 
     std::cout << "\n" << passed << " passed, " << failed << " failed.\n";
     return failed ? 1 : 0;
