@@ -1,44 +1,7 @@
 #pragma once
 #include <cmath>
 
-struct Vec2 {
-    double x, y;
-    Vec2(double x = 0, double y = 0) : x(x), y(y) {}
-    Vec2 operator+(const Vec2& o) const { return {x+o.x, y+o.y}; }
-    Vec2 operator-(const Vec2& o) const { return {x-o.x, y-o.y}; }
-    Vec2 operator*(double t)        const { return {x*t,   y*t};   }
-};
-
-inline double cross2d(Vec2 a, Vec2 b) { return a.x*b.y - a.y*b.x; }
-
-// Intersect segment AB with segment CD.
-// On success sets t (parameter on AB) and s (parameter on CD), both in [0,1].
-// Returns false if parallel or intersection falls outside either segment.
-inline bool segment_intersect(Vec2 a, Vec2 b, Vec2 c, Vec2 d,
-                               double& t, double& s) {
-    Vec2  r     = b - a;
-    Vec2  q     = d - c;
-    double denom = cross2d(r, q);
-    if (std::fabs(denom) < 1e-8f) return false;  // parallel
-    Vec2  ac = c - a;
-    t = cross2d(ac, q) / denom;
-    s = cross2d(ac, r) / denom;
-    return t >= 0.0f && t <= 1.0f && s >= 0.0f && s <= 1.0f;
-}
-
-// Returns true if p is inside or on the boundary of triangle (a, b, c).
-// Works for both CW and CCW winding.
-inline bool point_in_triangle_2d(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
-    double d1 = cross2d(b - a, p - a);
-    double d2 = cross2d(c - b, p - b);
-    double d3 = cross2d(a - c, p - c);
-    bool has_neg = (d1 < 0.0f) || (d2 < 0.0f) || (d3 < 0.0f);
-    bool has_pos = (d1 > 0.0f) || (d2 > 0.0f) || (d3 > 0.0f);
-    return !(has_neg && has_pos);
-}
-
-
-
+const double MIN_DOUBLE = 1e-8;
 
 struct Vec3 {
     double x, y, z;
@@ -54,7 +17,6 @@ struct Vec3 {
     }
     double length()     const { return std::sqrt(x*x + y*y + z*z); }
     Vec3  normalized() const { return *this / length(); }
-    Vec2 xy() const { return {x, y}; }
 };
 inline Vec3 operator*(double t, const Vec3& v) { return v * t; }
 
@@ -106,3 +68,32 @@ struct Mat4 {
         return r;
     }
 };
+
+inline double cross2D(Vec3 a, Vec3 b) { return a.x*b.y - a.y*b.x; }
+
+// Intersect of 2D line segment AB with 2D line segment CD.
+// On success sets t (parameter on AB) and s (parameter on CD), both in [0,1].
+// Returns false if parallel or intersection falls outside either segment.
+inline bool segment_intersect_2D(Vec3 a, Vec3 b, Vec3 c, Vec3 d,
+                               double& t, double& s) {
+    Vec3  r     = b - a;
+    Vec3  q     = d - c;
+    double denom = cross2D(r, q);
+    if (std::fabs(denom) < MIN_DOUBLE) return false;  // parallel
+    Vec3  ac = c - a;
+    t = cross2D(ac, q) / denom;
+    s = cross2D(ac, r) / denom;
+    return t > MIN_DOUBLE && t < (1.0f-MIN_DOUBLE) && s > MIN_DOUBLE && s < (1.0f-MIN_DOUBLE);
+}
+
+// Returns true if 2D point p is inside or on the boundary of 2D triangle (a, b, c).
+// Works for both CW and CCW winding.
+inline bool point_in_triangle_2D(Vec3 p, Vec3 a, Vec3 b, Vec3 c) {
+    double d1 = cross2D(b - a, p - a);
+    double d2 = cross2D(c - b, p - b);
+    double d3 = cross2D(a - c, p - c);
+    bool has_neg = (d1 < 0.0f) || (d2 < 0.0f) || (d3 < 0.0f);
+    bool has_pos = (d1 > 0.0f) || (d2 > 0.0f) || (d3 > 0.0f);
+    return !(has_neg && has_pos);
+}
+

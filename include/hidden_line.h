@@ -46,7 +46,7 @@ hidden_line_removal(const Scene& scene, const Mat4& mvp,
 
         int tri_idx = 0;
         for (const auto& tri : scene.triangles) {
-            auto occs = triangle_occlusion(line.a, line.b, tri, mvp, width, height, debug);
+            auto occs = triangle_occlusion(line, tri, mvp, width, height, debug);
             if (debug) {
                 std::cerr << "  tri[" << tri_idx << "]: "
                           << occs.size() << " occluded piece(s)\n";
@@ -64,8 +64,8 @@ hidden_line_removal(const Scene& scene, const Mat4& mvp,
         }
 
         for (const auto& iv : visible.intervals()) {
-            Vec2 Pa = line_a_2d->xy() + (line_b_2d->xy() - line_a_2d->xy()) * iv.lo;
-            Vec2 Pb = line_a_2d->xy() + (line_b_2d->xy() - line_a_2d->xy()) * iv.hi;
+            Vec3 Pa = *line_a_2d + (*line_b_2d - *line_a_2d) * iv.lo;
+            Vec3 Pb = *line_a_2d + (*line_b_2d - *line_a_2d) * iv.hi;
             result.push_back({Pa, Pb});
         }
     }

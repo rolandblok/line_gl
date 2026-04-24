@@ -5,7 +5,7 @@
 #include "scene.h"
 
 struct Line2D {
-    Vec2 a, b;
+    Vec3 a, b;
 };
 
 // Returns nullopt if the point is behind the camera (w <= 0).
@@ -32,7 +32,7 @@ inline std::vector<Line2D> project_scene(const Scene& scene, const Mat4& mvp,
         auto a = project_vertex(line.a, mvp, width, height);
         auto b = project_vertex(line.b, mvp, width, height);
         if (a && b)
-            result.push_back({a->xy(), b->xy()});
+            result.push_back({*a, *b});
     }
     return result;
 }

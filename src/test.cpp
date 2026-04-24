@@ -168,32 +168,32 @@ int main() {
     // Perpendicular segments crossing at (0.5, 0): t=0.5, s=0.5
     {
         double t, s;
-        bool hit = segment_intersect({0,0},{1,0}, {0.5f,-0.5f},{0.5f,0.5f}, t, s);
+        bool hit = segment_intersect_2D({0,0},{1,0}, {0.5,-0.5},{0.5,0.5}, t, s);
         check("perpendicular hit",       hit);
-        check("t==0.5",                  near(t, 0.5f));
-        check("s==0.5",                  near(s, 0.5f));
+        check("t==0.5",                  near(t, 0.5));
+        check("s==0.5",                  near(s, 0.5));
     }
 
     // Parallel segments — no intersection
     {
         double t, s;
-        bool hit = segment_intersect({0,0},{1,0}, {0,1},{1,1}, t, s);
+        bool hit = segment_intersect_2D({0,0},{1,0}, {0,1},{1,1}, t, s);
         check("parallel no hit",         !hit);
     }
 
     // Segments that would intersect if extended, but don't overlap
     {
         double t, s;
-        bool hit = segment_intersect({0,0},{0.4f,0}, {0.5f,-0.5f},{0.5f,0.5f}, t, s);
+        bool hit = segment_intersect_2D({0,0},{0.4,0}, {0.5,-0.5},{0.5,0.5}, t, s);
         check("short segment no hit",    !hit);
     }
 
     // Point inside triangle
-    Vec2 ta{0,0}, tb{1,0}, tc{0,1};
-    check("inside triangle",             point_in_triangle_2d({0.25f,0.25f}, ta, tb, tc));
-    check("outside triangle",           !point_in_triangle_2d({0.75f,0.75f}, ta, tb, tc));
-    check("on edge counts as inside",    point_in_triangle_2d({0.5f,0.0f},   ta, tb, tc));
-    check("at vertex counts as inside",  point_in_triangle_2d({0,0},         ta, tb, tc));
+    Vec3 ta{0,0}, tb{1,0}, tc{0,1};
+    check("inside triangle",             point_in_triangle_2D({0.25,0.25}, ta, tb, tc));
+    check("outside triangle",           !point_in_triangle_2D({0.75,0.75}, ta, tb, tc));
+    check("on edge counts as inside",    point_in_triangle_2D({0.5,0.0},   ta, tb, tc));
+    check("at vertex counts as inside",  point_in_triangle_2D({0,0},       ta, tb, tc));
 
     std::cout << "\n=== Depth ===\n";
 
@@ -215,11 +215,11 @@ int main() {
     double dt = pv_start->z + (pv_end->z - pv_start->z) * 0.5;
     check("depth interpolation at t=0.5", near(dt, (pv_start->z + pv_end->z) * 0.5));
 
-    // barycentric_2d: centroid has coords (1/3, 1/3, 1/3)
-    Vec2 ba{0,0}, bb{1,0}, bc{0,1};
-    Vec2 centroid{1.0/3.0, 1.0/3.0};
+    // barycentric_2D: centroid has coords (1/3, 1/3, 1/3)
+    Vec3 ba{0,0}, bb{1,0}, bc{0,1};
+    Vec3 centroid{1.0/3.0, 1.0/3.0};
     double bu, bv, bw;
-    bool bary_ok = barycentric_2d(centroid, ba, bb, bc, bu, bv, bw);
+    bool bary_ok = barycentric_2D(centroid, ba, bb, bc, bu, bv, bw);
     check("barycentric centroid ok",   bary_ok);
     check("barycentric u==1/3",        near(bu, 1.0/3.0));
     check("barycentric v==1/3",        near(bv, 1.0/3.0));
@@ -241,22 +241,25 @@ int main() {
 
     // Line at z=-2 (behind the triangle) passing through the triangle center
     Vec3 LP{-1, 0, -2}, LQ{1, 0, -2};
-    auto occ = triangle_occlusion(LP, LQ, big_tri, omvp, OW, OH);
+    Line3D line_PQ{LP, LQ};
+    auto occ = triangle_occlusion(line_PQ, big_tri, omvp, OW, OH);
     check("behind triangle: occluded",          !occ.empty());
 
     // Same line but now the triangle is at z=-4 (behind the line) — no occlusion
     Triangle3D far_tri{{-5,-5,-4},{5,-5,-4},{0,5,-4}};
-    auto occ2 = triangle_occlusion(LP, LQ, far_tri, omvp, OW, OH);
+    auto occ2 = triangle_occlusion(line_PQ, far_tri, omvp, OW, OH);
     check("triangle behind line: not occluded", occ2.empty());
 
     // Line entirely to the side of the big triangle — no occlusion
     Vec3 SP{-10, 0, -2}, SQ{-8, 0, -2};
-    auto occ3 = triangle_occlusion(SP, SQ, big_tri, omvp, OW, OH);
+    Line3D line_SQ{SP, SQ};
+    auto occ3 = triangle_occlusion(line_SQ, big_tri, omvp, OW, OH);
     check("line beside triangle: not occluded", occ3.empty());
 
     // Partially occluded: line crosses triangle boundary
     Vec3 HP{-10, 0, -2}, HQ{0, 0, -2};  // starts outside, ends at center
-    auto occ4 = triangle_occlusion(HP, HQ, big_tri, omvp, OW, OH);
+    Line3D line_HQ{HP, HQ};
+    auto occ4 = triangle_occlusion(line_HQ, big_tri, omvp, OW, OH);
     check("partial occlusion: interval found",  !occ4.empty());
     if (!occ4.empty()) {
         check("partial: t0 > 0",  occ4[0].t0 > 0.0f);
