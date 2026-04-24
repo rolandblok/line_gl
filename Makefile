@@ -4,10 +4,13 @@ BINDIR   = bin
 
 all: $(BINDIR)/line_gl $(BINDIR)/test_line_gl
 
-$(BINDIR)/line_gl: src/main.cpp
+$(BINDIR):
+	mkdir -p $(BINDIR)
+
+$(BINDIR)/line_gl: src/main.cpp | $(BINDIR)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
-$(BINDIR)/test_line_gl: src/test.cpp
+$(BINDIR)/test_line_gl: src/test.cpp | $(BINDIR)
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 clean:

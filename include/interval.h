@@ -4,12 +4,12 @@
 // Represents the visible portions of a line segment parameterized over [0, 1].
 // Stored as a sorted list of disjoint intervals.
 struct IntervalSet {
-    struct Interval { float lo, hi; };
+    struct Interval { double lo, hi; };
 
     IntervalSet() : _intervals{{0.0f, 1.0f}} {}
 
     // Punch out [lo, hi] from the visible set.
-    void subtract(float lo, float hi) {
+    void subtract(double lo, double hi) {
         if (lo >= hi) return;
         std::vector<Interval> result;
         for (const auto& iv : _intervals) {

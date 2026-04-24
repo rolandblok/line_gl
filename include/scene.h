@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "lgl_math.h"
+#include "vec_math.h"
 
 struct Line3D {
     Vec3 a, b;

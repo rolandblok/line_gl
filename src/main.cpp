@@ -54,12 +54,12 @@ static Scene make_test_scene() {
 }
 
 int main() {
-    const float W = 800.0f, H = 600.0f;
+    const double W = 800.0f, H = 600.0f;
 
     Scene scene = make_test_scene();
 
     Camera cam;
-    cam.position = {3.0f, 2.5f, 5.0f};
+    cam.position = {2.0f, 1.5f, 3.0f};
     cam.target   = {0.0f, 0.0f, 0.0f};
     cam.fov      = 3.14159265f / 3.0f;
     Mat4 mvp = cam.mvp(W / H);

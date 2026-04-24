@@ -5,7 +5,7 @@
 #include "project.h"
 
 struct SvgWriter {
-    SvgWriter(const std::string& path, float width, float height)
+    SvgWriter(const std::string& path, double width, double height)
         : _width(width), _height(height) {
         _file.open(path);
         _file << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -18,11 +18,11 @@ struct SvgWriter {
 
     void add_lines(const std::vector<Line2D>& lines,
                    const std::string& color = "black",
-                   float stroke_width = 1.0f) {
+                   double stroke_width = 1.0f) {
         for (const auto& l : lines) {
             _file << "  <line"
-                  << " x1=\"" << l.x0 << "\" y1=\"" << l.y0 << "\""
-                  << " x2=\"" << l.x1 << "\" y2=\"" << l.y1 << "\""
+                  << " x1=\"" << l.a.x << "\" y1=\"" << l.a.y << "\""
+                  << " x2=\"" << l.b.x << "\" y2=\"" << l.b.y << "\""
                   << " stroke=\"" << color << "\""
                   << " stroke-width=\"" << stroke_width << "\""
                   << "/>\n";
@@ -33,5 +33,5 @@ struct SvgWriter {
 
 private:
     std::ofstream _file;
-    float _width, _height;
+    double _width, _height;
 };

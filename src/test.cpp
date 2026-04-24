@@ -1,12 +1,12 @@
 #include <iostream>
 #include <cmath>
-#include "lgl_math.h"
+#include "vec_math.h"
 #include "scene.h"
 #include "transform.h"
 #include "project.h"
 #include "camera.h"
 #include "interval.h"
-#include "geom2d.h"
+
 #include "depth.h"
 #include "occlusion.h"
 #include "hidden_line.h"
@@ -18,7 +18,7 @@ static void check(const char* name, bool ok) {
     else     { std::cout << "  FAIL  " << name << "\n"; ++failed; }
 }
 
-static bool near(float a, float b) { return std::fabs(a - b) < 1e-5f; }
+static bool near(double a, double b) { return std::fabs(a - b) < 1e-5f; }
 
 int main() {
     std::cout << "=== Math ===\n";
@@ -70,7 +70,7 @@ int main() {
     check("scale",              near(s.x,2) && near(s.y,3) && near(s.z,4));
 
     // Rotation X by 90°: (0,1,0) → (0,0,1)
-    const float pi2 = 3.14159265f * 0.5f;
+    const double pi2 = 3.14159265f * 0.5f;
     Vec4 rx = make_rotation_x(pi2) * Vec4{0,1,0,0};
     check("rotation_x 90°",    near(rx.x,0) && near(rx.y,0) && near(rx.z,1));
 
@@ -95,19 +95,18 @@ int main() {
     std::cout << "\n=== Projection ===\n";
 
     // Origin through a camera at (0,0,5) looking at origin should land at screen center
-    const float W = 800.0f, H = 600.0f;
+    const double W = 800.0f, H = 600.0f;
     Mat4 pview = make_look_at({0,0,5}, {0,0,0}, {0,1,0});
     Mat4 pproj = make_perspective(3.14159265f * 0.5f, W / H, 0.1f, 100.0f);
     Mat4 mvp   = pproj * pview;
-    float sx, sy;
-    bool ok = project_vertex({0,0,0}, mvp, W, H, sx, sy);
-    check("origin projects ok",      ok);
-    check("origin projects to cx",   near(sx, W * 0.5f));
-    check("origin projects to cy",   near(sy, H * 0.5f));
+    auto origin_p = project_vertex({0,0,0}, mvp, W, H);
+    check("origin projects ok",      origin_p.has_value());
+    check("origin projects to cx",   near(origin_p->x, W * 0.5f));
+    check("origin projects to cy",   near(origin_p->y, H * 0.5f));
 
     // A point behind the camera should be rejected
-    bool behind = project_vertex({0,0,10}, mvp, W, H, sx, sy);
-    check("behind camera rejected",  !behind);
+    auto behind = project_vertex({0,0,10}, mvp, W, H);
+    check("behind camera rejected",  !behind.has_value());
 
     // project_scene: 2 lines, both in front → 2 Line2D results
     Scene ps;
@@ -121,16 +120,14 @@ int main() {
 
     // Default camera at (0,0,5) looking at origin: origin should hit screen center
     Camera cam;
-    float cx, cy;
-    bool hit = project_vertex({0,0,0}, cam.mvp(W/H), W, H, cx, cy);
-    check("camera origin projects ok",  hit);
-    check("camera origin at cx",        near(cx, W * 0.5f));
-    check("camera origin at cy",        near(cy, H * 0.5f));
+    auto hit = project_vertex({0,0,0}, cam.mvp(W/H), W, H);
+    check("camera origin projects ok",  hit.has_value());
+    check("camera origin at cx",        near(hit->x, W * 0.5f));
+    check("camera origin at cy",        near(hit->y, H * 0.5f));
 
     // A point directly above target should appear above center (smaller y in SVG = higher)
-    float ax, ay;
-    project_vertex({0,1,0}, cam.mvp(W/H), W, H, ax, ay);
-    check("above target is above cy",   ay < H * 0.5f);
+    auto above = project_vertex({0,1,0}, cam.mvp(W/H), W, H);
+    check("above target is above cy",   above && above->y < H * 0.5f);
 
     // Orbit 180° in yaw should flip the camera to the other side of the target
     Camera cam2;
@@ -170,7 +167,7 @@ int main() {
 
     // Perpendicular segments crossing at (0.5, 0): t=0.5, s=0.5
     {
-        float t, s;
+        double t, s;
         bool hit = segment_intersect({0,0},{1,0}, {0.5f,-0.5f},{0.5f,0.5f}, t, s);
         check("perpendicular hit",       hit);
         check("t==0.5",                  near(t, 0.5f));
@@ -179,14 +176,14 @@ int main() {
 
     // Parallel segments — no intersection
     {
-        float t, s;
+        double t, s;
         bool hit = segment_intersect({0,0},{1,0}, {0,1},{1,1}, t, s);
         check("parallel no hit",         !hit);
     }
 
     // Segments that would intersect if extended, but don't overlap
     {
-        float t, s;
+        double t, s;
         bool hit = segment_intersect({0,0},{0.4f,0}, {0.5f,-0.5f},{0.5f,0.5f}, t, s);
         check("short segment no hit",    !hit);
     }
@@ -204,37 +201,38 @@ int main() {
     Camera dcam;
     Mat4 dmvp = dcam.mvp(1.0f);
 
-    // Origin is between near and far, depth should be in (-1, 1)
-    float d0 = ndc_depth({0,0,0}, dmvp);
-    check("origin depth in NDC range", d0 > -1.0f && d0 < 1.0f);
+    // project_vertex z = NDC depth, in (-1, 1) for points inside frustum
+    auto pv0 = project_vertex({0,0,0}, dmvp, 1.0, 1.0);
+    check("origin depth in NDC range", pv0 && pv0->z > -1.0 && pv0->z < 1.0);
 
-    // Point behind camera returns 1.0 (far)
-    float dbehind = ndc_depth({0,0,10}, dmvp);
-    check("behind camera depth==1",    near(dbehind, 1.0f));
+    // Point behind camera returns nullopt
+    auto pv_behind = project_vertex({0,0,10}, dmvp, 1.0, 1.0);
+    check("behind camera no depth",    !pv_behind.has_value());
 
-    // depth_at_t: midpoint of segment from (0,0,0) to (0,0,-2) == depth of (0,0,-1)
-    float dt  = depth_at_t({0,0,0}, {0,0,-2}, 0.5f, dmvp);
-    float dm  = ndc_depth({0,0,-1}, dmvp);
-    check("depth_at_t midpoint",       near(dt, dm));
+    // depth interpolation: z lerps linearly between projected endpoints
+    auto pv_start = project_vertex({0,0,0},  dmvp, 1.0, 1.0);
+    auto pv_end   = project_vertex({0,0,-2}, dmvp, 1.0, 1.0);
+    double dt = pv_start->z + (pv_end->z - pv_start->z) * 0.5;
+    check("depth interpolation at t=0.5", near(dt, (pv_start->z + pv_end->z) * 0.5));
 
     // barycentric_2d: centroid has coords (1/3, 1/3, 1/3)
     Vec2 ba{0,0}, bb{1,0}, bc{0,1};
-    Vec2 centroid{1.0f/3.0f, 1.0f/3.0f};
-    float bu, bv, bw;
+    Vec2 centroid{1.0/3.0, 1.0/3.0};
+    double bu, bv, bw;
     bool bary_ok = barycentric_2d(centroid, ba, bb, bc, bu, bv, bw);
     check("barycentric centroid ok",   bary_ok);
-    check("barycentric u==1/3",        near(bu, 1.0f/3.0f));
-    check("barycentric v==1/3",        near(bv, 1.0f/3.0f));
-    check("barycentric w==1/3",        near(bw, 1.0f/3.0f));
+    check("barycentric u==1/3",        near(bu, 1.0/3.0));
+    check("barycentric v==1/3",        near(bv, 1.0/3.0));
+    check("barycentric w==1/3",        near(bw, 1.0/3.0));
 
     // triangle_depth_at: at vertex a the depth should equal da
-    float tri_d = triangle_depth_at(ba, ba, bb, bc, 0.2f, 0.5f, 0.8f);
-    check("depth at vertex a == da",   near(tri_d, 0.2f));
+    double tri_d = triangle_depth_at(ba, Vec3{ba.x, ba.y, 0.2}, Vec3{bb.x, bb.y, 0.5}, Vec3{bc.x, bc.y, 0.8});
+    check("depth at vertex a == da",   near(tri_d, 0.2));
 
     std::cout << "\n=== Occlusion ===\n";
 
     // Setup: camera at (0,0,5) looking at origin, 800x600 viewport
-    const float OW = 800.0f, OH = 600.0f;
+    const double OW = 800.0f, OH = 600.0f;
     Camera ocam;
     Mat4 omvp = ocam.mvp(OW / OH);
 
@@ -267,7 +265,7 @@ int main() {
 
     std::cout << "\n=== Hidden Line Removal ===\n";
 
-    const float HW = 800.0f, HH = 600.0f;
+    const double HW = 800.0f, HH = 600.0f;
     Camera hcam;
     Mat4 hmvp = hcam.mvp(HW / HH);
 

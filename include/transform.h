@@ -1,6 +1,6 @@
 #pragma once
 #include <cmath>
-#include "lgl_math.h"
+#include "vec_math.h"
 
 inline Mat4 make_translation(const Vec3& t) {
     Mat4 m = Mat4::identity();
@@ -18,34 +18,34 @@ inline Mat4 make_scale(const Vec3& s) {
     return m;
 }
 
-inline Mat4 make_rotation_x(float rad) {
+inline Mat4 make_rotation_x(double rad) {
     Mat4 m = Mat4::identity();
-    float c = std::cos(rad), s = std::sin(rad);
+    double c = std::cos(rad), s = std::sin(rad);
     m.m[1][1] =  c;  m.m[2][1] = -s;
     m.m[1][2] =  s;  m.m[2][2] =  c;
     return m;
 }
 
-inline Mat4 make_rotation_y(float rad) {
+inline Mat4 make_rotation_y(double rad) {
     Mat4 m = Mat4::identity();
-    float c = std::cos(rad), s = std::sin(rad);
+    double c = std::cos(rad), s = std::sin(rad);
     m.m[0][0] =  c;  m.m[2][0] =  s;
     m.m[0][2] = -s;  m.m[2][2] =  c;
     return m;
 }
 
-inline Mat4 make_rotation_z(float rad) {
+inline Mat4 make_rotation_z(double rad) {
     Mat4 m = Mat4::identity();
-    float c = std::cos(rad), s = std::sin(rad);
+    double c = std::cos(rad), s = std::sin(rad);
     m.m[0][0] =  c;  m.m[1][0] = -s;
     m.m[0][1] =  s;  m.m[1][1] =  c;
     return m;
 }
 
 // fov_y in radians, aspect = width/height, OpenGL NDC convention (z in [-1,1])
-inline Mat4 make_perspective(float fov_y, float aspect, float near, float far) {
+inline Mat4 make_perspective(double fov_y, double aspect, double near, double far) {
     Mat4 m{};
-    float f = 1.0f / std::tan(fov_y * 0.5f);
+    double f = 1.0f / std::tan(fov_y * 0.5f);
     m.m[0][0] = f / aspect;
     m.m[1][1] = f;
     m.m[2][2] = (far + near) / (near - far);
