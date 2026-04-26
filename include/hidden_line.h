@@ -14,7 +14,8 @@ static inline void dbg_vec2(const char* label, double x, double y) {
 
 inline std::vector<Line2D>
 hidden_line_removal(const Scene& scene, const Mat4& mvp,
-                    double width, double height, bool debug = false) {
+                    double width, double height, bool debug = false,
+                    std::vector<Vec3>* crossings = nullptr) {
     std::vector<Line2D> result;
     int line_idx = 0;
 
@@ -46,7 +47,7 @@ hidden_line_removal(const Scene& scene, const Mat4& mvp,
 
         int tri_idx = 0;
         for (const auto& tri : scene.triangles) {
-            auto occs = triangle_occlusion(line, tri, mvp, width, height, debug);
+            auto occs = triangle_occlusion(line, tri, mvp, width, height, debug, crossings);
             if (debug) {
                 std::cerr << "  tri[" << tri_idx << "]: "
                           << occs.size() << " occluded piece(s)\n";
@@ -72,3 +73,5 @@ hidden_line_removal(const Scene& scene, const Mat4& mvp,
 
     return result;
 }
+
+

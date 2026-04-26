@@ -22,7 +22,8 @@ triangle_occlusion(const Line3D& line_PQ,
                    const Triangle3D& tri_ABC,
                    const Mat4& mvp,
                    double width, double height,
-                   bool debug = false) {
+                   bool debug = false,
+                   std::vector<Vec3>* crossings = nullptr) {
 
     // --- Step 0: project everything to camera space and check for early outs ---
     auto P_cam = project_vertex(line_PQ.a,     mvp, width, height);
@@ -40,9 +41,9 @@ triangle_occlusion(const Line3D& line_PQ,
     double t_vals[5]; // at most 5 t values: 3 edge hits + 2 endpoints
     int   n = 0;
     double t, s;
-    if (segment_intersect_2D(*P_cam, *Q_cam, *A_cam, *B_cam, t, s)) { if (debug) std::cerr << "      edge AB hit t=" << t << "\n"; t_vals[n++] = t; }
-    if (segment_intersect_2D(*P_cam, *Q_cam, *B_cam, *C_cam, t, s)) { if (debug) std::cerr << "      edge BC hit t=" << t << "\n"; t_vals[n++] = t; }
-    if (segment_intersect_2D(*P_cam, *Q_cam, *C_cam, *A_cam, t, s)) { if (debug) std::cerr << "      edge CA hit t=" << t << "\n"; t_vals[n++] = t; }
+    if (segment_intersect_2D(*P_cam, *Q_cam, *A_cam, *B_cam, t, s)) { if (debug) std::cerr << "      edge AB hit t=" << t << "\n"; t_vals[n++] = t; if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t); }
+    if (segment_intersect_2D(*P_cam, *Q_cam, *B_cam, *C_cam, t, s)) { if (debug) std::cerr << "      edge BC hit t=" << t << "\n"; t_vals[n++] = t; if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t); }
+    if (segment_intersect_2D(*P_cam, *Q_cam, *C_cam, *A_cam, t, s)) { if (debug) std::cerr << "      edge CA hit t=" << t << "\n"; t_vals[n++] = t; if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t); }
 
     // Check if endpoints are inside the triangle (counts as an intersection at t=0 or t=1).
     bool p0_in = point_in_triangle_2D(*P_cam, *A_cam, *B_cam, *C_cam);
@@ -59,14 +60,31 @@ triangle_occlusion(const Line3D& line_PQ,
     double tb = *std::max_element(t_vals, t_vals + n);
     if (tb - ta < 1e-6f) return {};
 
-    // --- Step 2: find t_triangle (line crosses triangle plane in 3D) ---
+    // --- Step 2: find t_split — the 2D screen-space t where the line crosses the triangle's plane.
+    // t_triangle is in 3D; perspective projection is non-linear so we project the 3D crossing
+    // point and re-parameterize it along the 2D segment to get the correct 2D split t.
     Vec3  N     = tri_ABC.normal();
     Vec3  PQ    = line_PQ.b - line_PQ.a;
     double denom = N.dot(PQ);
-    double t_triangle = (std::fabs(denom) < MIN_DOUBLE) ? -1.0f  // segment parallel to plane
-                                                : N.dot(tri_ABC.a - line_PQ.a) / denom;
+    double t_split = -1.0; // -1 means: no split (parallel or outside interval)
+    double t_triangle = -1.0;
+    if (std::fabs(denom) >= MIN_DOUBLE) {
+        t_triangle = N.dot(tri_ABC.a - line_PQ.a) / denom;
+        // Project the 3D crossing point to screen space and find its t along the 2D segment.
+        Vec3 world_cross = line_PQ.a + PQ * t_triangle;
+        auto cross_cam = project_vertex(world_cross, mvp, width, height);
+        if (cross_cam) {
+            Vec3   PQ_2d = *Q_cam - *P_cam;
+            double ax = std::fabs(PQ_2d.x), ay = std::fabs(PQ_2d.y);
+            double t_2d = (ax > ay)
+                ? (cross_cam->x - P_cam->x) / PQ_2d.x
+                : (cross_cam->y - P_cam->y) / PQ_2d.y;
+            if (t_2d > ta && t_2d < tb)
+                t_split = t_2d;
+        }
+    }
 
-    if (debug) std::cerr << "      t_triangle=" << t_triangle
+    if (debug) std::cerr << "      t_triangle=" << t_triangle << "  t_split(2D)=" << t_split
                          << "  2D interval [" << ta << ", " << tb << "]\n";
 
     // --- Step 3 & 4: split at t_triangle and depth-check each piece ---
@@ -88,10 +106,11 @@ triangle_occlusion(const Line3D& line_PQ,
             result.push_back({a, b});
     };
 
-    // If the triangle intersects the line segment, we have two pieces to test: [ta, t_triangle] and [t_triangle, tb].
-    if (t_triangle > ta && t_triangle < tb) {
-        test_piece(ta, t_triangle);
-        test_piece(t_triangle, tb);
+    // If the triangle plane crosses the 2D interval, split and depth-test each piece separately.
+    if (t_split > ta && t_split < tb) {
+        if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t_split);
+        test_piece(ta, t_split);
+        test_piece(t_split, tb);
     } else {
         test_piece(ta, tb);
     }

@@ -64,14 +64,19 @@ int main() {
     cam.fov      = 3.14159265f / 3.0f;
     Mat4 mvp = cam.mvp(W / H);
 
-    auto lines2d = hidden_line_removal(scene, mvp, W, H, /*debug=*/true);
+    std::vector<Vec3> crossings;
+    auto lines2d = hidden_line_removal(scene, mvp, W, H, /*debug=*/true, &crossings);
     std::cout << "hidden-line segments : " << lines2d.size() << "\n";
+
+
+    SvgWriter svg("output.svg", W, H);
+    svg.add_lines(lines2d, "black", 1.5f, true);
+    for (const auto& p : crossings)
+        svg.add_dot(p, 4.0, "orange");
 
     auto lines_raw = project_scene(scene, mvp, W, H);
     std::cout << "raw projected segments: " << lines_raw.size() << "\n";
 
-    SvgWriter svg("output.svg", W, H);
-    svg.add_lines(lines2d, "black", 1.5f);
 
     SvgWriter svg_raw("output_non_occlude.svg", W, H);
     svg_raw.add_lines(lines_raw, "black", 1.5f);
