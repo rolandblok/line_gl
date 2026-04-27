@@ -45,18 +45,28 @@ triangle_occlusion(const Line2D& line_PQ,
 
     double t, s;
     // Edge crossings: s gives exact position on the triangle edge → interpolate z_tri along edge.
+    auto hit_xy = [&](double ti) -> std::pair<double,double> {
+        return { P.x + (Q.x - P.x) * ti, P.y + (Q.y - P.y) * ti };
+    };
+
     if (segment_intersect_2D(P, Q, A, B, t, s)) {
-        if (debug) std::cerr << "      edge AB hit t=" << t << " s=" << s << "\n";
+        auto [hx, hy] = hit_xy(t);
+        if (debug) std::cerr << "      edge AB hit t=" << t << " s=" << s
+                             << "  xy=(" << hx << "," << hy << ")\n";
         pts[n++] = {t, A.z + (B.z - A.z) * s};
         if (crossings) crossings->push_back(P + (Q - P) * t);
     }
     if (segment_intersect_2D(P, Q, B, C, t, s)) {
-        if (debug) std::cerr << "      edge BC hit t=" << t << " s=" << s << "\n";
+        auto [hx, hy] = hit_xy(t);
+        if (debug) std::cerr << "      edge BC hit t=" << t << " s=" << s
+                             << "  xy=(" << hx << "," << hy << ")\n";
         pts[n++] = {t, B.z + (C.z - B.z) * s};
         if (crossings) crossings->push_back(P + (Q - P) * t);
     }
     if (segment_intersect_2D(P, Q, C, A, t, s)) {
-        if (debug) std::cerr << "      edge CA hit t=" << t << " s=" << s << "\n";
+        auto [hx, hy] = hit_xy(t);
+        if (debug) std::cerr << "      edge CA hit t=" << t << " s=" << s
+                             << "  xy=(" << hx << "," << hy << ")\n";
         pts[n++] = {t, C.z + (A.z - C.z) * s};
         if (crossings) crossings->push_back(P + (Q - P) * t);
     }

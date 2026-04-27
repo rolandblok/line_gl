@@ -37,12 +37,23 @@ hidden_line_removal(const ProjectedScene& scene,
 
         int tri_idx = 0;
         for (const auto& tri : scene.triangles) {
+            if (debug) {
+                std::cerr << "  vs tri[" << tri_idx << "]"
+                          << "  A(" << tri.a.x << "," << tri.a.y << ")"
+                          << "  B(" << tri.b.x << "," << tri.b.y << ")"
+                          << "  C(" << tri.c.x << "," << tri.c.y << ")\n";
+            }
             auto occs = triangle_occlusion(line, tri, debug, crossings);
             if (debug) {
                 std::cerr << "  tri[" << tri_idx << "]: "
                           << occs.size() << " occluded piece(s)\n";
-                for (const auto& occ : occs)
-                    std::cerr << "    subtract [" << occ.t0 << ", " << occ.t1 << "]\n";
+                for (const auto& occ : occs) {
+                    Vec3 Pa = line.a + (line.b - line.a) * occ.t0;
+                    Vec3 Pb = line.a + (line.b - line.a) * occ.t1;
+                    std::cerr << "    subtract [" << occ.t0 << ", " << occ.t1 << "]"
+                              << "  xy0=(" << Pa.x << "," << Pa.y << ")"
+                              << "  xy1=(" << Pb.x << "," << Pb.y << ")\n";
+                }
             }
             for (const auto& occ : occs) visible.subtract(occ.t0, occ.t1);
             ++tri_idx;
@@ -50,8 +61,13 @@ hidden_line_removal(const ProjectedScene& scene,
 
         if (debug) {
             std::cerr << "  visible intervals: " << visible.intervals().size() << "\n";
-            for (const auto& iv : visible.intervals())
-                std::cerr << "    [" << iv.lo << ", " << iv.hi << "]\n";
+            for (const auto& iv : visible.intervals()) {
+                Vec3 Pa = line.a + (line.b - line.a) * iv.lo;
+                Vec3 Pb = line.a + (line.b - line.a) * iv.hi;
+                std::cerr << "    [" << iv.lo << ", " << iv.hi << "]"
+                          << "  xy0=(" << Pa.x << "," << Pa.y << ")"
+                          << "  xy1=(" << Pb.x << "," << Pb.y << ")\n";
+            }
         }
 
         for (const auto& iv : visible.intervals()) {

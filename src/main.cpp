@@ -77,18 +77,18 @@
     Vec3 A1{ 0.0,  1.5, 0};
     Vec3 A2{ 0,  0.0, 1.5};
     s.add_triangle(A0, A1, A2);
-    s.add_line(A0, A1);
-    s.add_line(A1, A2);
-    s.add_line(A2, A0);
+    //s.add_line(A0, A1, color{255,0,0});
+    //s.add_line(A1, A2, color{0,255,0});
+    s.add_line(A2, A0, color{0,0,255});
 
     // Triangle B: 
     Vec3 B0{2.0, 0, 1.0};
     Vec3 B1{ -2.0, 0,  0};
     Vec3 B2{ -2.0,    2,  0.0};
     s.add_triangle(B0, B1, B2);
-    s.add_line(B0, B1);
-    s.add_line(B1, B2);
-    s.add_line(B2, B0);
+    s.add_line(B0, B1, color{255,0,0});
+    //s.add_line(B1, B2, color{0,255,0});
+    //s.add_line(B2, B0, color{0,0,255});
 
     return s;
 }
