@@ -1,119 +1,120 @@
 #pragma once
-#include <optional>
 #include <vector>
 #include <algorithm>
 #include <iostream>
+#include <cmath>
 #include "vec_math.h"
-#include "scene.h"
 #include "depth.h"
 #include "project.h"
 
 struct OccludedInterval { double t0, t1; };
 
-// Returns the sub-intervals of PQ that the triangle occludes (0, 1, or 2 pieces).
+// Returns the sub-intervals of PQ that the projected triangle occludes.
+//
+// All inputs are pre-projected (xy = screen, z = view-space depth, larger = closer to camera).
 //
 // Strategy:
-//  1. Find the 2D interval [ta, tb] where the projected segment overlaps the projected triangle.
-//  2. Find t_plane: where the segment crosses the triangle's plane in 3D.
-//  3. Split [ta, tb] at t_plane — each piece is either entirely in front or behind.
-//  4. Keep only the pieces where the segment is behind the triangle (larger NDC z).
+//  1. Find the 2D interval [ta, tb] where the line overlaps the triangle in screen space.
+//     Track z_tri at each boundary point via edge interpolation (using the 's' param from
+//     segment_intersect_2D) or barycentric (for endpoint-inside cases).
+//  2. Compute delta = z_line - z_tri at ta and tb.
+//     delta < 0 → line is farther from camera (occluded).
+//  3. If delta has opposite signs at ta and tb, find the crossover t analytically (linear).
+//  4. Emit the sub-intervals where delta < -kDepthBias.
 inline std::vector<OccludedInterval>
-triangle_occlusion(const Line3D& line_PQ, 
-                   const Triangle3D& tri_ABC,
-                   const Mat4& mvp,
-                   double width, double height,
+triangle_occlusion(const Line2D& line_PQ,
+                   const ProjectedTriangle& tri_ABC,
                    bool debug = false,
                    std::vector<Vec3>* crossings = nullptr) {
 
-    // --- Step 0: project everything to camera space and check for early outs ---
-    auto P_cam = project_vertex(line_PQ.a,     mvp, width, height);
-    auto Q_cam = project_vertex(line_PQ.b,     mvp, width, height);
-    auto A_cam = project_vertex(tri_ABC.a, mvp, width, height);
-    auto B_cam = project_vertex(tri_ABC.b, mvp, width, height);
-    auto C_cam = project_vertex(tri_ABC.c, mvp, width, height);
-    if (!P_cam || !Q_cam || !A_cam || !B_cam || !C_cam) return {};
+    const Vec3& P = line_PQ.a;
+    const Vec3& Q = line_PQ.b;
+    const Vec3& A = tri_ABC.a;
+    const Vec3& B = tri_ABC.b;
+    const Vec3& C = tri_ABC.c;
 
-    if (debug) std::cerr << "      tri 2D: A(" << A_cam->x << "," << A_cam->y
-                         << ") B(" << B_cam->x << "," << B_cam->y
-                         << ") C(" << C_cam->x << "," << C_cam->y << ")\n";
+    if (debug) std::cerr << "      tri 2D: A(" << A.x << "," << A.y
+                         << ") B(" << B.x << "," << B.y
+                         << ") C(" << C.x << "," << C.y << ")\n";
 
-    // --- Step 1: find all 2D intervals ---
-    double t_vals[5]; // at most 5 t values: 3 edge hits + 2 endpoints
-    int   n = 0;
+    // --- Step 1: find all 2D overlap boundary points ---
+    // Each point records t (on PQ) and z_tri (triangle's view-space depth at that screen point).
+    struct BoundaryPt { double t; double z_tri; };
+    BoundaryPt pts[5];
+    int n = 0;
+
     double t, s;
-    if (segment_intersect_2D(*P_cam, *Q_cam, *A_cam, *B_cam, t, s)) { if (debug) std::cerr << "      edge AB hit t=" << t << "\n"; t_vals[n++] = t; if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t); }
-    if (segment_intersect_2D(*P_cam, *Q_cam, *B_cam, *C_cam, t, s)) { if (debug) std::cerr << "      edge BC hit t=" << t << "\n"; t_vals[n++] = t; if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t); }
-    if (segment_intersect_2D(*P_cam, *Q_cam, *C_cam, *A_cam, t, s)) { if (debug) std::cerr << "      edge CA hit t=" << t << "\n"; t_vals[n++] = t; if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t); }
+    // Edge crossings: s gives exact position on the triangle edge → interpolate z_tri along edge.
+    if (segment_intersect_2D(P, Q, A, B, t, s)) {
+        if (debug) std::cerr << "      edge AB hit t=" << t << " s=" << s << "\n";
+        pts[n++] = {t, A.z + (B.z - A.z) * s};
+        if (crossings) crossings->push_back(P + (Q - P) * t);
+    }
+    if (segment_intersect_2D(P, Q, B, C, t, s)) {
+        if (debug) std::cerr << "      edge BC hit t=" << t << " s=" << s << "\n";
+        pts[n++] = {t, B.z + (C.z - B.z) * s};
+        if (crossings) crossings->push_back(P + (Q - P) * t);
+    }
+    if (segment_intersect_2D(P, Q, C, A, t, s)) {
+        if (debug) std::cerr << "      edge CA hit t=" << t << " s=" << s << "\n";
+        pts[n++] = {t, C.z + (A.z - C.z) * s};
+        if (crossings) crossings->push_back(P + (Q - P) * t);
+    }
 
-    // Check if endpoints are inside the triangle (counts as an intersection at t=0 or t=1).
-    bool p0_in = point_in_triangle_2D(*P_cam, *A_cam, *B_cam, *C_cam);
-    bool p1_in = point_in_triangle_2D(*Q_cam, *A_cam, *B_cam, *C_cam);
-    if (debug) std::cerr << "      P_cam in tri=" << (p0_in ? "true" : "false") << "  Q_cam in tri=" << (p1_in ? "true" : "false") << "\n";
-    if (p0_in) t_vals[n++] = 0.0f;
-    if (p1_in) t_vals[n++] = 1.0f;
+    // Endpoint-inside: use barycentric to get z_tri at P or Q.
+    bool p0_in = point_in_triangle_2D(P, A, B, C);
+    bool p1_in = point_in_triangle_2D(Q, A, B, C);
+    if (debug) std::cerr << "      P in tri=" << (p0_in ? "true" : "false")
+                         << "  Q in tri=" << (p1_in ? "true" : "false") << "\n";
+    if (p0_in) pts[n++] = {0.0, triangle_depth_at(P, A, B, C)};
+    if (p1_in) pts[n++] = {1.0, triangle_depth_at(Q, A, B, C)};
 
     if (debug) std::cerr << "      n=" << n << "\n";
     if (n < 2) return {};
 
-    // find the min/max to get the full interval [ta, tb] of overlap.
-    double ta = *std::min_element(t_vals, t_vals + n);
-    double tb = *std::max_element(t_vals, t_vals + n);
-    if (tb - ta < 1e-6f) return {};
-
-    // --- Step 2: find t_split — the 2D screen-space t where the line crosses the triangle's plane.
-    // t_triangle is in 3D; perspective projection is non-linear so we project the 3D crossing
-    // point and re-parameterize it along the 2D segment to get the correct 2D split t.
-    Vec3  N     = tri_ABC.normal();
-    Vec3  PQ    = line_PQ.b - line_PQ.a;
-    double denom = N.dot(PQ);
-    double t_split = -1.0; // -1 means: no split (parallel or outside interval)
-    double t_triangle = -1.0;
-    if (std::fabs(denom) >= MIN_DOUBLE) {
-        t_triangle = N.dot(tri_ABC.a - line_PQ.a) / denom;
-        // Project the 3D crossing point to screen space and find its t along the 2D segment.
-        Vec3 world_cross = line_PQ.a + PQ * t_triangle;
-        auto cross_cam = project_vertex(world_cross, mvp, width, height);
-        if (cross_cam) {
-            Vec3   PQ_2d = *Q_cam - *P_cam;
-            double ax = std::fabs(PQ_2d.x), ay = std::fabs(PQ_2d.y);
-            double t_2d = (ax > ay)
-                ? (cross_cam->x - P_cam->x) / PQ_2d.x
-                : (cross_cam->y - P_cam->y) / PQ_2d.y;
-            if (t_2d > ta && t_2d < tb)
-                t_split = t_2d;
-        }
+    // Find ta (min t) and tb (max t) with their z_tri values.
+    int ia = 0, ib = 0;
+    for (int i = 1; i < n; i++) {
+        if (pts[i].t < pts[ia].t) ia = i;
+        if (pts[i].t > pts[ib].t) ib = i;
     }
+    double ta = pts[ia].t, tb = pts[ib].t;
+    if (tb - ta < 1e-6) return {};
 
-    if (debug) std::cerr << "      t_triangle=" << t_triangle << "  t_split(2D)=" << t_split
-                         << "  2D interval [" << ta << ", " << tb << "]\n";
+    // --- Step 2: depth delta at both interval endpoints ---
+    // delta = z_line - z_tri;  delta < 0 → line is farther from camera (occluded).
+    double delta_a = (P.z + (Q.z - P.z) * ta) - pts[ia].z_tri;
+    double delta_b = (P.z + (Q.z - P.z) * tb) - pts[ib].z_tri;
 
-    // --- Step 3 & 4: split at t_triangle and depth-check each piece ---
-    constexpr double kDepthBias = 1e-4;
+    if (debug) std::cerr << "      2D interval [" << ta << ", " << tb << "]"
+                         << "  delta_a=" << delta_a << "  delta_b=" << delta_b << "\n";
 
+    // --- Step 3 & 4: classify and emit ---
+    // z = clip.w: larger = farther from camera. Line is occluded when z_line > z_tri.
+    // delta = z_line - z_tri > 0 means line is farther (behind) the triangle.
+    constexpr double kDepthBias = 0.001;
     std::vector<OccludedInterval> result;
 
-    // Helper to test a piece of the line segment for occlusion. If the line is behind the triangle, add it to the result.
-    auto test_piece = [&](double a, double b) {
-        if (b - a < 1e-6) return;
-        double tmid      = (a + b) * 0.5;
-        Vec3   pmid      = *P_cam + (*Q_cam - *P_cam) * tmid;
-        double line_depth = P_cam->z + (Q_cam->z - P_cam->z) * tmid;
-        double tri_depth  = triangle_depth_at(pmid, *A_cam, *B_cam, *C_cam);
-        if (debug) std::cerr << "      piece [" << a << "," << b << "]"
-                             << " line_depth=" << line_depth
-                             << " tri_depth=" << tri_depth << "\n";
-        if (line_depth > tri_depth + kDepthBias)
-            result.push_back({a, b});
-    };
+    bool a_behind = delta_a > kDepthBias;
+    bool b_behind = delta_b > kDepthBias;
 
-    // If the triangle plane crosses the 2D interval, split and depth-test each piece separately.
-    if (t_split > ta && t_split < tb) {
-        if (crossings) crossings->push_back(*P_cam + (*Q_cam - *P_cam) * t_split);
-        test_piece(ta, t_split);
-        test_piece(t_split, tb);
+    if (a_behind && b_behind) {
+        // Fully behind triangle → whole interval occluded.
+        result.push_back({ta, tb});
+    } else if (!a_behind && !b_behind) {
+        // Fully in front (or coplanar) → nothing occluded.
     } else {
-        test_piece(ta, tb);
+        // Depth crossover within the interval — find it analytically.
+        double denom = delta_a - delta_b;
+        if (std::fabs(denom) < 1e-10) return result;
+        double t_cross = ta + (tb - ta) * delta_a / denom;
+        t_cross = std::clamp(t_cross, ta, tb);
+        if (debug) std::cerr << "      depth crossover at t=" << t_cross << "\n";
+        if (crossings) crossings->push_back(P + (Q - P) * t_cross);
+        if (a_behind) result.push_back({ta,      t_cross});
+        else          result.push_back({t_cross, tb     });
     }
 
     return result;
 }
+

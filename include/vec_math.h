@@ -3,6 +3,11 @@
 
 const double MIN_DOUBLE = 1e-8;
 
+struct color {
+    int x, y, z;
+    color(int x = 0, int y = 0, int z = 0) : x(x), y(y), z(z) {}
+};
+
 struct Vec3 {
     double x, y, z;
     Vec3(double x = 0, double y = 0, double z = 0) : x(x), y(y), z(z) {}
@@ -83,7 +88,7 @@ inline bool segment_intersect_2D(Vec3 a, Vec3 b, Vec3 c, Vec3 d,
     Vec3  ac = c - a;
     t = cross2D(ac, q) / denom;
     s = cross2D(ac, r) / denom;
-    return t > MIN_DOUBLE && t < (1.0f-MIN_DOUBLE) && s > MIN_DOUBLE && s < (1.0f-MIN_DOUBLE);
+    return t > -MIN_DOUBLE && t < (1.0f+MIN_DOUBLE) && s > -MIN_DOUBLE && s < (1.0f+MIN_DOUBLE);
 }
 
 // Returns true if 2D point p is inside or on the boundary of 2D triangle (a, b, c).

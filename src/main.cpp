@@ -5,10 +5,19 @@
 #include "project.h"
 #include "hidden_line.h"
 #include "svg.h"
+#include "vec_math.h"
+
+[[maybe_unused]] static Scene make_xyz_axis_scene() {
+    Scene s;
+    s.add_line({0,0,0}, {0.5,0,0}, color{255,0,0});
+    s.add_line({0,0,0}, {0,0.5,0}, color{0,255,0});
+    s.add_line({0,0,0}, {0,0,0.5}, color{0,0,255});
+    return s;
+}
 
 // Simple test scene: one triangle in the XY plane, one line passing through it from behind.
 // Expected result: the line is split into two visible segments on either side of the triangle.
-static Scene make_test_scene() {
+[[maybe_unused]] static Scene make_test_scene() {
     Scene s;
 
     Vec3 ta{0,0,0}, tb{1,0,0}, tc{0,1,0};
@@ -21,6 +30,8 @@ static Scene make_test_scene() {
 
     // Line at z=-1 (behind the triangle), crossing through its projected area at y=0.25
     s.add_line({0.5f, 0.5f, -1}, {0.5f, 0.5f, 1});
+    s.add_line({0.25f, 0.5f, -1}, {0.5f, 0.25f, 1});
+    s.add_line({0.5f, 0.2f, -1}, {0.5f, 0.2f, 0.2});
 
     return s;
 }
@@ -53,10 +64,36 @@ static Scene make_test_scene() {
     return s;
 }
 
+// Two triangles that half-cross each other:
+//   - Triangle A is tilted so its left half is in front, right half behind triangle B.
+//   - Triangle B is tilted the opposite way.
+// Each triangle's edges should be visible on the half that sticks out in front.
+[[maybe_unused]] static Scene make_crossing_triangles() {
+    Scene s;
+
+    // Triangle A: left side close (z=+0.5), right side far (z=-0.5)
+    Vec3 A0{ 1.5,  0,  0};
+    Vec3 A1{ 0.0,  1.5, 0};
+    Vec3 A2{ 0,  0.0, 1.5};
+    s.add_triangle(A0, A1, A2);
+    s.add_line(A0, A1);
+    s.add_line(A1, A2);
+    s.add_line(A2, A0);
+
+    // Triangle B: left side far (z=-0.5), right side close (z=+0.5)
+    Vec3 B0{1.0, 00, 1.0};
+    Vec3 B1{ -1.0, 0,  0};
+    Vec3 B2{ -1.0,    1,  0.0};
+    s.add_triangle(B0, B1, B2);
+    s.add_line(B0, B1);
+    s.add_line(B1, B2);
+    s.add_line(B2, B0);
+
+    return s;
+}
+
 int main() {
     const double W = 800.0f, H = 600.0f;
-
-    Scene scene = make_test_scene();
 
     Camera cam;
     cam.position = {2.0f, 1.5f, 3.0f};
@@ -64,22 +101,36 @@ int main() {
     cam.fov      = 3.14159265f / 3.0f;
     Mat4 mvp = cam.mvp(W / H);
 
-    std::vector<Vec3> crossings;
-    auto lines2d = hidden_line_removal(scene, mvp, W, H, /*debug=*/true, &crossings);
-    std::cout << "hidden-line segments : " << lines2d.size() << "\n";
+    Scene xyz = make_xyz_axis_scene();
+    auto xyz_p  = project_scene_full(xyz, mvp, W, H);
 
 
-    SvgWriter svg("output.svg", W, H);
-    svg.add_lines(lines2d, "black", 1.5f, true);
-    for (const auto& p : crossings)
-        svg.add_dot(p, 4.0, "orange");
 
-    auto lines_raw = project_scene(scene, mvp, W, H);
-    std::cout << "raw projected segments: " << lines_raw.size() << "\n";
+    auto render = [&](Scene& scene, const char* out, const char* out_raw, bool debug = false) {
+        std::vector<Vec3> crossings;
+        auto pscene  = project_scene_full(scene, mvp, W, H);
+        auto lines2d = hidden_line_removal(pscene, debug, &crossings);
+        std::cout << out << ": " << lines2d.size() << " segments\n";
+
+        SvgWriter svg(out, W, H);
+        svg.add_lines(lines2d, 1.0f, false);
+        svg.add_lines(xyz_p.lines, 2.0f, false);
+        for (const auto& p : crossings)
+            svg.add_dot(p, 4.0, "orange");
+
+        SvgWriter svg_raw(out_raw, W, H);
+        svg_raw.add_lines(project_scene(scene, mvp, W, H), 1.5);
+    };
 
 
-    SvgWriter svg_raw("output_non_occlude.svg", W, H);
-    svg_raw.add_lines(lines_raw, "black", 1.5f);
+    auto s1 = make_test_scene();
+    render(s1, "output.svg",          "output_non_occlude.svg", false);
+
+    auto s2 = make_cube();
+    render(s2, "output_cube.svg",     "output_cube_raw.svg");
+
+    auto s3 = make_crossing_triangles();
+    render(s3, "output_crossing.svg", "output_crossing_raw.svg", true);
 
     return 0;
 }

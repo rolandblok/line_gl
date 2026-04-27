@@ -14,10 +14,12 @@ struct Camera {
         return make_look_at(position, target, up);
     }
 
+    // Projection matrix for given aspect ratio (width/height)
     Mat4 projection(double aspect) const {
         return make_perspective(fov, aspect, near, far);
     }
 
+    // Model-View-Projection matrix for given aspect ratio and optional model transform
     Mat4 mvp(double aspect, const Mat4& model = Mat4::identity()) const {
         return projection(aspect) * view() * model;
     }

@@ -13,41 +13,31 @@ static inline void dbg_vec2(const char* label, double x, double y) {
 }
 
 inline std::vector<Line2D>
-hidden_line_removal(const Scene& scene, const Mat4& mvp,
-                    double width, double height, bool debug = false,
+hidden_line_removal(const ProjectedScene& scene,
+                    bool debug = false,
                     std::vector<Vec3>* crossings = nullptr) {
     std::vector<Line2D> result;
     int line_idx = 0;
 
+    // For each line, find the 2D intervals where it's occluded by any triangle, then punch those out from the visible set.
     for (const auto& line : scene.lines) {
-
-        // Project endpoints to 2D. If either is behind the camera, skip the line.
-        auto line_a_2d = project_vertex(line.a, mvp, width, height);
-        auto line_b_2d = project_vertex(line.b, mvp, width, height);
 
         if (debug) {
             std::cerr << "\n[line " << line_idx << "]"
-                      << " 3D (" << line.a.x << "," << line.a.y << "," << line.a.z << ")"
-                      << " -> (" << line.b.x << "," << line.b.y << "," << line.b.z << ")\n";
-            if (!line_a_2d) std::cerr << "  endpoint A behind camera — skip\n";
-            if (!line_b_2d) std::cerr << "  endpoint B behind camera — skip\n";
-        }
-        ++line_idx;
-        if (!line_a_2d || !line_b_2d) continue;
-
-        if (debug) {
-            dbg_vec2("  2D A:", line_a_2d->x, line_a_2d->y);
-            dbg_vec2("  2D B:", line_b_2d->x, line_b_2d->y);
-            double dx = line_b_2d->x - line_a_2d->x, dy = line_b_2d->y - line_a_2d->y;
+                      << " 2D A(" << line.a.x << "," << line.a.y << ")"
+                      << " -> B(" << line.b.x << "," << line.b.y << ")\n";
+            dbg_vec2("  2D A:", line.a.x, line.a.y);
+            dbg_vec2("  2D B:", line.b.x, line.b.y);
+            double dx = line.b.x - line.a.x, dy = line.b.y - line.a.y;
             std::cerr << "  2D length: " << std::sqrt(dx*dx + dy*dy) << "\n";
         }
+        ++line_idx;
 
-        // Start with the whole line visible, then punch out occluded pieces.
         IntervalSet visible;
 
         int tri_idx = 0;
         for (const auto& tri : scene.triangles) {
-            auto occs = triangle_occlusion(line, tri, mvp, width, height, debug, crossings);
+            auto occs = triangle_occlusion(line, tri, debug, crossings);
             if (debug) {
                 std::cerr << "  tri[" << tri_idx << "]: "
                           << occs.size() << " occluded piece(s)\n";
@@ -65,9 +55,13 @@ hidden_line_removal(const Scene& scene, const Mat4& mvp,
         }
 
         for (const auto& iv : visible.intervals()) {
-            Vec3 Pa = *line_a_2d + (*line_b_2d - *line_a_2d) * iv.lo;
-            Vec3 Pb = *line_a_2d + (*line_b_2d - *line_a_2d) * iv.hi;
-            result.push_back({Pa, Pb});
+            Vec3 Pa = line.a + (line.b - line.a) * iv.lo;
+            Vec3 Pb = line.a + (line.b - line.a) * iv.hi;
+            Line2D visible_line;
+            visible_line.a = Pa;
+            visible_line.b = Pb;
+            visible_line.col = line.col;
+            result.push_back(visible_line);
         }
     }
 

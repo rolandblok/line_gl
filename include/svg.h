@@ -17,14 +17,13 @@ struct SvgWriter {
     }
 
     void add_lines(const std::vector<Line2D>& lines,
-                   const std::string& color = "black",
                    double stroke_width = 1.0f,
                    bool debug_endpoints = false) {
         for (const auto& l : lines) {
             _file << "  <line"
                   << " x1=\"" << l.a.x << "\" y1=\"" << l.a.y << "\""
                   << " x2=\"" << l.b.x << "\" y2=\"" << l.b.y << "\""
-                  << " stroke=\"" << color << "\""
+                  << " stroke=\"rgb(" << l.col.x << "," << l.col.y << "," << l.col.z << ")\""
                   << " stroke-width=\"" << stroke_width << "\""
                   << "/>\n";
             if (debug_endpoints) {
