@@ -4,6 +4,7 @@
 #include "camera.h"
 #include "project.h"
 #include "hidden_line.h"
+#include "intersect.h"
 #include "svg.h"
 #include "vec_math.h"
 
@@ -20,7 +21,7 @@
 [[maybe_unused]] static Scene make_test_scene() {
     Scene s;
 
-    Vec3 ta{0,0,0}, tb{1,0,0}, tc{0,1,0};
+    Vec3 ta{0,0,0}, tb{2,0,0}, tc{0,2,0};
     s.add_triangle(ta, tb, tc);
 
     // Triangle edges (coplanar with the face; depth bias prevents self-occlusion)
@@ -29,9 +30,9 @@
     s.add_line(tc, ta);
 
     // Line at z=-1 (behind the triangle), crossing through its projected area at y=0.25
-    s.add_line({0.5f, 0.5f, -1}, {0.5f, 0.5f, 1});
-    s.add_line({0.25f, 0.5f, -1}, {0.5f, 0.25f, 1});
-    s.add_line({0.5f, 0.2f, -1}, {0.5f, 0.2f, 0.2});
+    s.add_line({1, 1, -2}, {1,1, 2});
+    s.add_line({0.5, 1, -2}, {1, 0.5, 2});
+    s.add_line({1, 0.4, -2}, {1, 0.4, 0.4});
 
     return s;
 }
@@ -71,7 +72,7 @@
 [[maybe_unused]] static Scene make_crossing_triangles() {
     Scene s;
 
-    // Triangle A: left side close (z=+0.5), right side far (z=-0.5)
+    // Triangle A: 
     Vec3 A0{ 1.5,  0,  0};
     Vec3 A1{ 0.0,  1.5, 0};
     Vec3 A2{ 0,  0.0, 1.5};
@@ -80,10 +81,10 @@
     s.add_line(A1, A2);
     s.add_line(A2, A0);
 
-    // Triangle B: left side far (z=-0.5), right side close (z=+0.5)
-    Vec3 B0{1.0, 00, 1.0};
-    Vec3 B1{ -1.0, 0,  0};
-    Vec3 B2{ -1.0,    1,  0.0};
+    // Triangle B: 
+    Vec3 B0{2.0, 0, 1.0};
+    Vec3 B1{ -2.0, 0,  0};
+    Vec3 B2{ -2.0,    2,  0.0};
     s.add_triangle(B0, B1, B2);
     s.add_line(B0, B1);
     s.add_line(B1, B2);
@@ -109,6 +110,7 @@ int main() {
     auto render = [&](Scene& scene, const char* out, const char* out_raw, bool debug = false) {
         std::vector<Vec3> crossings;
         auto pscene  = project_scene_full(scene, mvp, W, H);
+        // add_triangle_intersection_lines(pscene);
         auto lines2d = hidden_line_removal(pscene, debug, &crossings);
         std::cout << out << ": " << lines2d.size() << " segments\n";
 
