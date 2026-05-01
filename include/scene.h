@@ -16,6 +16,7 @@ struct Scene {
     std::vector<Triangle3D> triangles;
     Vec3                    light_direction = {0.0, -1.0, -1.0};  // world-space, not normalised
     Camera                  cam;
+    bool                    show_intersection_lines = true;  // if false, skip add_triangle_intersection_lines
 
     void add_line(const Vec3& a, const Vec3& b, color col = color{}, int parent_tri = -1) {
         lines.push_back({a, b, col});
@@ -74,12 +75,31 @@ struct Scene {
         add_line(v[2], v[6], col, base+7);
     }
 
-    // Loads lines, triangles, blocks and light_direction from a JSON file.
+// Adds a quad defined by 4 coplanar points, splitting it into two triangles.
+    // triA = (a,b,c) owns outer edges a-b and b-c.
+    // triB = (a,c,d) owns outer edges c-d and d-a.
+    // show_edges[0..3] = ab, bc, cd, da
+    void add_rectangle(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d,
+                       color col = color{}, bool show_edges[4] = nullptr) {
+        int base = (int)triangles.size();
+        add_triangle(a, b, c);  // triA = base+0
+        add_triangle(a, c, d);  // triB = base+1
+        bool defaults[4] = {true, true, true, true};
+        bool* e = show_edges ? show_edges : defaults;
+        if (e[0]) add_line(a, b, col, base+0);
+        if (e[1]) add_line(b, c, col, base+0);
+        if (e[2]) add_line(c, d, col, base+1);
+        if (e[3]) add_line(d, a, col, base+1);
+    }
+
+    // Loads lines, triangles, blocks, rectangles and light_direction from a JSON file.
     // Format:
     //   { "light_direction": [x,y,z],
-    //     "lines":     [{ "a":[x,y,z], "b":[x,y,z], "col":[r,g,b] }, ...],
-    //     "triangles": [{ "a":[x,y,z], "b":[x,y,z], "c":[x,y,z]  }, ...],
-    //     "blocks":    [{ "origin":[x,y,z], "dx":n, "dy":n, "dz":n, "col":[r,g,b] }, ...] }
+    //     "lines":      [{ "a":[x,y,z], "b":[x,y,z], "col":[r,g,b] }, ...],
+    //     "triangles":  [{ "a":[x,y,z], "b":[x,y,z], "c":[x,y,z]  }, ...],
+    //     "rectangles": [{ "a":[x,y,z], "b":[x,y,z], "c":[x,y,z], "d":[x,y,z], "col":[r,g,b], "show_edges":[1,1,1,1] }, ...],
+    //     "blocks":     [{ "origin":[x,y,z], "dx":n, "dy":n, "dz":n, "col":[r,g,b] }, ...],
+    //     "show_intersection_lines": true|false }
     void load_json(const std::string& path) {
         std::ifstream f(path);
         if (!f) throw std::runtime_error("Cannot open scene file: " + path);
@@ -160,7 +180,13 @@ struct Scene {
         while (peek() != '}') {
             std::string key = read_string();
             eat(':');
-            if (key == "light_direction") {
+            if (key == "show_intersection_lines") {
+                // read a boolean: true or false
+                skip();
+                if (src.compare(pos, 4, "true") == 0)  { show_intersection_lines = true;  pos += 4; }
+                else if (src.compare(pos, 5, "false") == 0) { show_intersection_lines = false; pos += 5; }
+                else skip_val();
+            } else if (key == "light_direction") {
                 light_direction = read_v3();
             } else if (key == "camera") {
                 eat('{');
@@ -214,6 +240,41 @@ struct Scene {
                     }
                     eat('}');
                     add_triangle(a, b, c);
+                    if (peek()==',') eat(',');
+                }
+                eat(']');
+            } else if (key == "rectangles") {
+                eat('[');
+                while (peek() != ']') {
+                    Vec3 a{}, b{}, c{}, d{}; color col{};
+                    bool se[4] = {true, true, true, true};
+                    bool has_show_edges = false;
+                    eat('{');
+                    while (peek() != '}') {
+                        std::string k = read_string(); eat(':');
+                        if      (k=="a")   a   = read_v3();
+                        else if (k=="b")   b   = read_v3();
+                        else if (k=="c")   c   = read_v3();
+                        else if (k=="d")   d   = read_v3();
+                        else if (k=="col") col = read_col();
+                        else if (k=="show_edges") {
+                            eat('[');
+                            for (int i = 0; i < 4; ++i) {
+                                se[i] = (read_number() != 0.0);
+                                if (i < 3) eat(',');
+                            }
+                            eat(']');
+                            has_show_edges = true;
+                        }
+                        else skip_val();
+                        if (peek()==',') eat(',');
+                    }
+                    eat('}');
+                    // if no show_edges key, fall back to show_intersection_lines
+                    if (!has_show_edges) {
+                        for (int i = 0; i < 4; ++i) se[i] = show_intersection_lines;
+                    }
+                    add_rectangle(a, b, c, d, col, se);
                     if (peek()==',') eat(',');
                 }
                 eat(']');

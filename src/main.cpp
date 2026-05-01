@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
         std::string out_raw = "svg/" + stem + "_raw.svg";
         std::vector<Vec3> crossings;
         auto pscene  = project_scene_full(scene, mvp, W, H, view_mat);
-        add_triangle_intersection_lines(pscene);
+        if (scene.show_intersection_lines) add_triangle_intersection_lines(pscene);
         auto lines2d = hidden_line_removal(pscene, debug, &crossings);
         std::cout << out << ": " << lines2d.size() << " segments\n";
 
