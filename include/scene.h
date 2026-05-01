@@ -6,6 +6,7 @@ struct Line3D {
     Vec3 a, b;
     color col;
     Line3D(const Vec3& a, const Vec3& b, color col = color{}) : a(a), b(b), col(col) {}
+    Vec3 lerp(double t) const { return a + (b - a) * t; }
 };
 
 struct Triangle3D {

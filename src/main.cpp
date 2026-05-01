@@ -77,18 +77,18 @@
     Vec3 A1{ 0.0,  1.5, 0};
     Vec3 A2{ 0,  0.0, 1.5};
     s.add_triangle(A0, A1, A2);
-    //s.add_line(A0, A1, color{255,0,0});
-    //s.add_line(A1, A2, color{0,255,0});
+    s.add_line(A0, A1, color{255,0,0});
+    s.add_line(A1, A2, color{0,255,0});
     s.add_line(A2, A0, color{0,0,255});
 
     // Triangle B: 
     Vec3 B0{2.0, 0, 1.0};
     Vec3 B1{ -2.0, 0,  0};
-    Vec3 B2{ -2.0,    2,  0.0};
+    Vec3 B2{ -2.0,    1,  0.0};
     s.add_triangle(B0, B1, B2);
     s.add_line(B0, B1, color{255,0,0});
-    //s.add_line(B1, B2, color{0,255,0});
-    //s.add_line(B2, B0, color{0,0,255});
+    s.add_line(B1, B2, color{0,255,0});
+    s.add_line(B2, B0, color{0,0,255});
 
     return s;
 }
@@ -96,21 +96,33 @@
 int main() {
     const double W = 800.0f, H = 600.0f;
 
-    Camera cam;
-    cam.position = {2.0f, 1.5f, 3.0f};
-    cam.target   = {0.0f, 0.0f, 0.0f};
-    cam.fov      = 3.14159265f / 3.0f;
+    Camera cam_persp;
+    cam_persp.position   = {2.0f, 1.5f, 3.0f};
+    cam_persp.target     = {0.0f, 0.0f, 0.0f};
+    cam_persp.fov        = 3.14159265f / 3.0f;
+    cam_persp.proj_mode  = ProjectionMode::Perspective;
+
+    Camera cam_ortho;
+    cam_ortho.position      = {2.0f, 1.5f, 3.0f};
+    cam_ortho.target        = {0.0f, 0.0f, 0.0f};
+    cam_ortho.proj_mode     = ProjectionMode::Orthographic;
+    cam_ortho.ortho_height  = 2.5;
+
+    // ── switch projection here ──────────────────────────────
+    Camera& cam = cam_ortho;
+    // ────────────────────────────────────────────────────────
+
+    Mat4 view = cam.view();
+    const Mat4* view_mat = (cam.proj_mode == ProjectionMode::Orthographic) ? &view : nullptr;
     Mat4 mvp = cam.mvp(W / H);
 
     Scene xyz = make_xyz_axis_scene();
-    auto xyz_p  = project_scene_full(xyz, mvp, W, H);
-
-
+    auto xyz_p = project_scene_full(xyz, mvp, W, H, view_mat);
 
     auto render = [&](Scene& scene, const char* out, const char* out_raw, bool debug = false) {
         std::vector<Vec3> crossings;
-        auto pscene  = project_scene_full(scene, mvp, W, H);
-        // add_triangle_intersection_lines(pscene);
+        auto pscene  = project_scene_full(scene, mvp, W, H, view_mat);
+        add_triangle_intersection_lines(pscene);
         auto lines2d = hidden_line_removal(pscene, debug, &crossings);
         std::cout << out << ": " << lines2d.size() << " segments\n";
 
@@ -121,9 +133,8 @@ int main() {
             svg.add_dot(p, 4.0, "orange");
 
         SvgWriter svg_raw(out_raw, W, H);
-        svg_raw.add_lines(project_scene(scene, mvp, W, H), 1.5);
+        svg_raw.add_lines(project_scene(scene, mvp, W, H, view_mat), 1.5);
     };
-
 
     auto s1 = make_test_scene();
     render(s1, "output.svg",          "output_non_occlude.svg", false);

@@ -26,8 +26,6 @@ hidden_line_removal(const ProjectedScene& scene,
             std::cerr << "\n[line " << line_idx << "]"
                       << " 2D A(" << line.a.x << "," << line.a.y << ")"
                       << " -> B(" << line.b.x << "," << line.b.y << ")\n";
-            dbg_vec2("  2D A:", line.a.x, line.a.y);
-            dbg_vec2("  2D B:", line.b.x, line.b.y);
             double dx = line.b.x - line.a.x, dy = line.b.y - line.a.y;
             std::cerr << "  2D length: " << std::sqrt(dx*dx + dy*dy) << "\n";
         }

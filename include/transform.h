@@ -44,6 +44,7 @@ inline Mat4 make_rotation_z(double rad) {
 
 // fov_y in radians, aspect = width/height, OpenGL NDC convention (z in [-1,1])
 inline Mat4 make_perspective(double fov_y, double aspect, double near, double far) {
+
     Mat4 m{};
     double f = 1.0f / std::tan(fov_y * 0.5f);
     m.m[0][0] = f / aspect;
@@ -51,6 +52,21 @@ inline Mat4 make_perspective(double fov_y, double aspect, double near, double fa
     m.m[2][2] = (far + near) / (near - far);
     m.m[2][3] = -1.0f;
     m.m[3][2] = (2.0f * far * near) / (near - far);
+    return m;
+}
+
+// Orthographic projection. half-height = ortho_height, aspect = width/height.
+// clip.w = 1 always; pass the view matrix to project_vertex for correct depth.
+inline Mat4 make_orthographic(double left, double right, double bottom, double top,
+                               double near, double far) {
+    Mat4 m{};
+    m.m[0][0] =  2.0 / (right - left);
+    m.m[1][1] =  2.0 / (top   - bottom);
+    m.m[2][2] = -2.0 / (far   - near);
+    m.m[3][0] = -(right + left)   / (right - left);
+    m.m[3][1] = -(top   + bottom) / (top   - bottom);
+    m.m[3][2] = -(far   + near)   / (far   - near);
+    m.m[3][3] =  1.0;
     return m;
 }
 

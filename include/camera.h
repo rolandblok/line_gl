@@ -2,6 +2,8 @@
 #include "vec_math.h"
 #include "transform.h"
 
+enum class ProjectionMode { Perspective, Orthographic };
+
 struct Camera {
     Vec3  position = {0, 0, 5};
     Vec3  target   = {0, 0, 0};
@@ -9,6 +11,8 @@ struct Camera {
     double fov      = 3.14159265f / 3.0f;  // 60° vertical, in radians
     double near     = 0.1f;
     double far      = 100.0f;
+    ProjectionMode proj_mode   = ProjectionMode::Perspective;
+    double ortho_height        = 5.0;  // half-height of the ortho view volume
 
     Mat4 view() const {
         return make_look_at(position, target, up);
@@ -16,6 +20,10 @@ struct Camera {
 
     // Projection matrix for given aspect ratio (width/height)
     Mat4 projection(double aspect) const {
+        if (proj_mode == ProjectionMode::Orthographic) {
+            double h = ortho_height;
+            return make_orthographic(-h * aspect, h * aspect, -h, h, near, far);
+        }
         return make_perspective(fov, aspect, near, far);
     }
 
