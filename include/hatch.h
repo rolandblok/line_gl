@@ -48,7 +48,7 @@ inline bool clip_ray_to_triangle_3d(
 inline void add_hatching(Scene& scene,
                          double max_spacing  = 0.18,
                          double min_spacing  = 0.03,
-                         double shade_cutoff = 0.85,
+                         double shade_cutoff = 0.95,
                          double epsilon      = 0.001,
                          color  hatch_col    = color{80, 80, 80})
 {
@@ -56,6 +56,10 @@ inline void add_hatching(Scene& scene,
 
     for (const auto& tri : scene.triangles) {
         Vec3 n = tri.normal();
+
+        // Back-face cull: skip triangles facing away from the camera.
+        Vec3 centroid = (tri.a + tri.b + tri.c) / 3.0;
+        if (n.dot(scene.cam.position - centroid) <= 0.0) continue;
 
         // Shade: 0 = fully dark, 1 = fully lit
         double shade = std::clamp(-n.dot(light), 0.0, 1.0);
@@ -102,7 +106,7 @@ inline void add_hatching(Scene& scene,
 
             Vec3 P0 = origin + hatch_dir * t0 + n * epsilon;
             Vec3 P1 = origin + hatch_dir * t1 + n * epsilon;
-            scene.add_line(P0, P1, hatch_col);
+            scene.add_line(P0, P1, hatch_col, tri.id);
         }
     }
 }

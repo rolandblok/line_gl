@@ -8,6 +8,7 @@ inline double cross2Dxy(Vec3 v1, Vec3 v2) {
 struct Line3D {
     Vec3 a, b;
     color col;
+    int  parent_tri = -1;   // index into Scene::triangles; -1 = none
     Line3D() = default;
     Line3D(const Vec3& a, const Vec3& b, color col = color{}) : a(a), b(b), col(col) {}
     Vec3 lerp(double t) const { return a + (b - a) * t; }
@@ -17,6 +18,7 @@ struct Line3D {
 
 struct Triangle3D {
     Vec3 a, b, c;
+    int  id = -1;   // index into Scene::triangles, assigned when added
     Vec3 normal() const { return (b - a).cross(c - a).normalized(); }
 };
 

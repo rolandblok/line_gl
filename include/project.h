@@ -53,7 +53,10 @@ inline ProjectedScene project_scene_full(const Scene& scene, const Mat4& mvp,
     for (const auto& line : scene.lines) {
         auto a = project_vertex(line.a, mvp, width, height, view_mat);
         auto b = project_vertex(line.b, mvp, width, height, view_mat);
-        if (a && b) ps.lines.push_back({*a, *b, line.col});
+        if (a && b) {
+            ps.lines.push_back({*a, *b, line.col});
+            ps.lines.back().parent_tri = line.parent_tri;
+        }
     }
     for (const auto& tri : scene.triangles) {
         auto a = project_vertex(tri.a, mvp, width, height, view_mat);

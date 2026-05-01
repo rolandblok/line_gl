@@ -36,6 +36,7 @@ hidden_line_removal(const ProjectedScene& scene,
 
         int tri_idx = 0;
         for (const auto& tri : scene.triangles) {
+            if (line.parent_tri == tri_idx) { ++tri_idx; continue; }
             if (debug) {
                 std::cerr << "  vs tri[" << tri_idx << "]"
                           << "  A(" << tri.a.x << "," << tri.a.y << ")"

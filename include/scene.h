@@ -17,9 +17,14 @@ struct Scene {
     Vec3                    light_direction = {0.0, -1.0, -1.0};  // world-space, not normalised
     Camera                  cam;
 
-    void add_line(const Vec3& a, const Vec3& b, color col = color{}) 
-                  { lines.push_back({a, b, col}); }
-    void add_triangle(const Vec3& a, const Vec3& b, const Vec3& c) { triangles.push_back({a, b, c}); }
+    void add_line(const Vec3& a, const Vec3& b, color col = color{}, int parent_tri = -1) {
+        lines.push_back({a, b, col});
+        lines.back().parent_tri = parent_tri;
+    }
+    void add_triangle(const Vec3& a, const Vec3& b, const Vec3& c) {
+        triangles.push_back({a, b, c});
+        triangles.back().id = (int)triangles.size() - 1;
+    }
 
     // Adds an axis-aligned box with one corner at `origin` and given width/height/depth.
     void add_block(const Vec3& origin, double dx, double dy, double dz,
@@ -35,23 +40,38 @@ struct Scene {
             origin + Vec3{ 0, dy, dz},
         };
 
-        int edges[12][2] = {
-            {0,1},{1,2},{2,3},{3,0},
-            {4,5},{5,6},{6,7},{7,4},
-            {0,4},{1,5},{2,6},{3,7},
-        };
-        for (auto& e : edges)
-            add_line(v[e[0]], v[e[1]], col);
-
+        // Add triangles first so their IDs are known when we set parent_tri on edges.
+        // Faces as quads {f0,f1,f2,f3}:
+        //   triA = (f0,f1,f2) owns outer edges f0-f1 and f1-f2
+        //   triB = (f0,f2,f3) owns outer edges f2-f3 and f3-f0
+        int base = (int)triangles.size();
         int faces[6][4] = {
             {0,3,2,1}, {4,5,6,7},
             {0,1,5,4}, {2,3,7,6},
             {0,4,7,3}, {1,2,6,5},
         };
         for (auto& f : faces) {
-            add_triangle(v[f[0]], v[f[1]], v[f[2]]);
-            add_triangle(v[f[0]], v[f[2]], v[f[3]]);
+            add_triangle(v[f[0]], v[f[1]], v[f[2]]);  // triA
+            add_triangle(v[f[0]], v[f[2]], v[f[3]]);  // triB
         }
+
+        // Edges with parent_tri set to one of the triangles they lie on.
+        // face 0 ({0,3,2,1}): triA=base+0 owns {0,3},{2,3}; triB=base+1 owns {1,2},{0,1}
+        add_line(v[0], v[1], col, base+1);
+        add_line(v[1], v[2], col, base+1);
+        add_line(v[2], v[3], col, base+0);
+        add_line(v[3], v[0], col, base+0);
+        // face 1 ({4,5,6,7}): triA=base+2 owns {4,5},{5,6}; triB=base+3 owns {6,7},{7,4}
+        add_line(v[4], v[5], col, base+2);
+        add_line(v[5], v[6], col, base+2);
+        add_line(v[6], v[7], col, base+3);
+        add_line(v[7], v[4], col, base+3);
+        // face 2 ({0,1,5,4}): triA=base+4 owns {1,5}; triB=base+5 owns {0,4}
+        add_line(v[1], v[5], col, base+4);
+        add_line(v[0], v[4], col, base+5);
+        // face 3 ({2,3,7,6}): triA=base+6 owns {3,7}; triB=base+7 owns {2,6}
+        add_line(v[3], v[7], col, base+6);
+        add_line(v[2], v[6], col, base+7);
     }
 
     // Loads lines, triangles, blocks and light_direction from a JSON file.
