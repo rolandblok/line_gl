@@ -8,6 +8,7 @@
 #include "intersect.h"
 #include "svg.h"
 #include "vec_math.h"
+#include "hatch.h"
 
 [[maybe_unused]] static Scene make_xyz_axis_scene() {
     Scene s;
@@ -72,6 +73,7 @@ int main(int argc, char* argv[]) {
 
     for (const auto& path : scene_files) {
         Scene s; s.load_json(path);
+        add_hatching(s);
         render(s, path);
     }
 

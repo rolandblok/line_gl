@@ -5,6 +5,7 @@
         "projection": "orthographic",
         "ortho_height": 2.5
     },
+    "light_direction": [0.0, -1.0, -2.0],
     "blocks": [
         { "origin": [-2,0,-2], "dx": 0.5, "dy": 0.7, "dz": 0.4 },
         { "origin": [-2,0,-1], "dx": 0.5, "dy": 0.7, "dz": 0.4 },
