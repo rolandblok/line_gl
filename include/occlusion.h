@@ -22,7 +22,7 @@ struct OccludedInterval { double t0, t1; };
 //  3. If delta has opposite signs at ta and tb, find the crossover t analytically (linear).
 //  4. Emit the sub-intervals where delta < -kDepthBias.
 inline std::vector<OccludedInterval>
-triangle_occlusion(const Line2D& line_PQ,
+triangle_occlusion(const Line3D& line_PQ,
                    const ProjectedTriangle& tri_ABC,
                    bool debug = false,
                    std::vector<Vec3>* crossings = nullptr) {

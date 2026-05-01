@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include "project.h"
 #include "vec_math.h"
+#include "primitives.h" 
 
 // ---------------------------------------------------------------------------
 // projected_triangle_intersection
@@ -22,7 +23,7 @@
 inline bool projected_triangle_intersection(
     const ProjectedTriangle& A,
     const ProjectedTriangle& B,
-    Line2D& out)
+    Line3D& out)
 {
     // ---- plane normals and offsets ----------------------------------------
     Vec3 nA = (A.b - A.a).cross(A.c - A.a);
@@ -77,7 +78,7 @@ inline bool projected_triangle_intersection(
     double t_min = -1e18, t_max = 1e18;
 
     auto clip_to_tri = [&](const ProjectedTriangle& T) -> bool {
-        double area2 = cross2D(T.b - T.a, T.c - T.a);
+        double area2 = cross2Dxy(T.b - T.a, T.c - T.a);
         if (std::abs(area2) < 1e-10) return false;  // degenerate triangle
         double sgn = (area2 > 0) ? 1.0 : -1.0;
 
@@ -128,7 +129,7 @@ inline void add_triangle_intersection_lines(ProjectedScene& pscene,
     const std::size_t n = pscene.triangles.size();
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = i + 1; j < n; ++j) {
-            Line2D seg;
+            Line3D seg;
             if (projected_triangle_intersection(
                     pscene.triangles[i], pscene.triangles[j], seg)) {
                 seg.col = col;

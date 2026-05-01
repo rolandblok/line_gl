@@ -16,7 +16,7 @@ struct SvgWriter {
               << "  <rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n";
     }
 
-    void add_lines(const std::vector<Line2D>& lines,
+    void add_lines(const std::vector<Line3D>& lines,
                    double stroke_width = 1.0f,
                    bool debug_endpoints = false) {
         for (const auto& l : lines) {

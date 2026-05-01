@@ -74,31 +74,3 @@ struct Mat4 {
     }
 };
 
-inline double cross2D(Vec3 a, Vec3 b) { return a.x*b.y - a.y*b.x; }
-
-// Intersect of 2D line segment AB with 2D line segment CD.
-// On success sets t (parameter on AB) and s (parameter on CD), both in [0,1].
-// Returns false if parallel or intersection falls outside either segment.
-inline bool segment_intersect_2D(Vec3 a, Vec3 b, Vec3 c, Vec3 d,
-                               double& t, double& s) {
-    Vec3  r     = b - a;
-    Vec3  q     = d - c;
-    double denom = cross2D(r, q);
-    if (std::fabs(denom) < MIN_DOUBLE) return false;  // parallel
-    Vec3  ac = c - a;
-    t = cross2D(ac, q) / denom;
-    s = cross2D(ac, r) / denom;
-    return t > -MIN_DOUBLE && t < (1.0f+MIN_DOUBLE) && s > -MIN_DOUBLE && s < (1.0f+MIN_DOUBLE);
-}
-
-// Returns true if 2D point p is inside or on the boundary of 2D triangle (a, b, c).
-// Works for both CW and CCW winding.
-inline bool point_in_triangle_2D(Vec3 p, Vec3 a, Vec3 b, Vec3 c) {
-    double d1 = cross2D(b - a, p - a);
-    double d2 = cross2D(c - b, p - b);
-    double d3 = cross2D(a - c, p - c);
-    bool has_neg = (d1 < 0.0f) || (d2 < 0.0f) || (d3 < 0.0f);
-    bool has_pos = (d1 > 0.0f) || (d2 > 0.0f) || (d3 > 0.0f);
-    return !(has_neg && has_pos);
-}
-

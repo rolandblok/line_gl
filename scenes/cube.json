@@ -1,0 +1,11 @@
+{
+    "camera": {
+        "position": [2.0, 1.5, 3.0],
+        "target":   [0.0, 0.0, 0.0],
+        "projection": "perspective",
+        "fov": 1.0472
+    },
+    "blocks": [
+        { "origin": [-1,-1,-1], "dx": 2, "dy": 2, "dz": 2 }
+    ]
+}

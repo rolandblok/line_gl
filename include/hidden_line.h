@@ -6,17 +6,18 @@
 #include "project.h"
 #include "interval.h"
 #include "occlusion.h"
+#include "primitives.h"
 
 // debug helpers — print Vec2 / NDC depth
 static inline void dbg_vec2(const char* label, double x, double y) {
     std::cerr << "    " << label << " (" << x << ", " << y << ")\n";
 }
 
-inline std::vector<Line2D>
+inline std::vector<Line3D>
 hidden_line_removal(const ProjectedScene& scene,
                     bool debug = false,
                     std::vector<Vec3>* crossings = nullptr) {
-    std::vector<Line2D> result;
+    std::vector<Line3D> result;
     int line_idx = 0;
 
     // For each line, find the 2D intervals where it's occluded by any triangle, then punch those out from the visible set.
@@ -71,7 +72,7 @@ hidden_line_removal(const ProjectedScene& scene,
         for (const auto& iv : visible.intervals()) {
             Vec3 Pa = line.a + (line.b - line.a) * iv.lo;
             Vec3 Pb = line.a + (line.b - line.a) * iv.hi;
-            Line2D visible_line;
+            Line3D visible_line;
             visible_line.a = Pa;
             visible_line.b = Pb;
             visible_line.col = line.col;

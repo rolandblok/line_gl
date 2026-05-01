@@ -2,4 +2,4 @@ bin/
 *.exe
 *.o
 *.obj
-output*.svg
+svg/

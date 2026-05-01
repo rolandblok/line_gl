@@ -3,18 +3,15 @@
 #include <vector>
 #include "vec_math.h"
 #include "scene.h"
+#include "primitives.h"
 
-struct Line2D {
-    Vec3 a, b;
-    color col{};  // optional color for SVG output; default black
-};
 
 struct ProjectedTriangle {
     Vec3 a, b, c;   // xy = screen position, z = view-space depth (clip.w: positive, larger = closer)
 };
 
 struct ProjectedScene {
-    std::vector<Line2D>           lines;
+    std::vector<Line3D>           lines;
     std::vector<ProjectedTriangle> triangles;
 };
 
@@ -69,10 +66,10 @@ inline ProjectedScene project_scene_full(const Scene& scene, const Mat4& mvp,
 
 // Projects only the lines (for a raw unoccluded view).
 // For orthographic, pass the view matrix as view_mat for correct depth.
-inline std::vector<Line2D> project_scene(const Scene& scene, const Mat4& mvp,
+inline std::vector<Line3D> project_scene(const Scene& scene, const Mat4& mvp,
                                           double width, double height,
                                           const Mat4* view_mat = nullptr) {
-    std::vector<Line2D> result;
+    std::vector<Line3D> result;
     for (const auto& line : scene.lines) {
         auto a = project_vertex(line.a, mvp, width, height, view_mat);
         auto b = project_vertex(line.b, mvp, width, height, view_mat);
