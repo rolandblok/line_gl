@@ -47,7 +47,7 @@ inline bool clip_ray_to_triangle_3d(
 //   hatch_col    — colour of hatch lines
 inline void add_hatching(Scene& scene,
                          double max_spacing  = 0.18,
-                         double min_spacing  = 0.05,
+                         double min_spacing  = 0.1,
                          double shade_cutoff = 0.95,
                          double epsilon      = 0.001,
                          color  hatch_col    = color{180, 180, 180})
@@ -58,8 +58,8 @@ inline void add_hatching(Scene& scene,
         Vec3 n = tri.normal();
 
         // Back-face cull: skip triangles facing away from the camera.
-        // Vec3 centroid = (tri.a + tri.b + tri.c) / 3.0;
-        // if (n.dot(scene.cam.position - centroid) <= 0.0) continue;
+        Vec3 centroid = (tri.a + tri.b + tri.c) / 3.0;
+        if (n.dot(scene.cam.position - centroid) <= 0.0) continue;
 
         // Shade: 0 = fully dark, 1 = fully lit
         double shade = std::clamp(-n.dot(light), 0.0, 1.0);

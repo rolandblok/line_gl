@@ -3,12 +3,12 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
-#include <functional>
-#include <cctype>
 #include <cstdint>
 #include "vec_math.h"
 #include "primitives.h"
 #include "camera.h"
+#include "rapidjson/document.h"
+#include "rapidjson/istreamwrapper.h"
 
 
 struct Scene {
@@ -28,8 +28,11 @@ struct Scene {
     }
 
     // Adds an axis-aligned box with one corner at `origin` and given width/height/depth.
+    // show_edges[0..3]  = bottom edges: v0-v1, v1-v2, v2-v3, v3-v0
+    // show_edges[4..7]  = top edges:    v4-v5, v5-v6, v6-v7, v7-v4
+    // show_edges[8..11] = vertical:     v0-v4, v1-v5, v2-v6, v3-v7
     void add_block(const Vec3& origin, double dx, double dy, double dz,
-                   color col = color{}) {
+                   color col = color{}, bool show_edges[12] = nullptr) {
         Vec3 v[8] = {
             origin,
             origin + Vec3{dx,  0,  0},
@@ -57,22 +60,22 @@ struct Scene {
         }
 
         // Edges with parent_tri set to one of the triangles they lie on.
-        // face 0 ({0,3,2,1}): triA=base+0 owns {0,3},{2,3}; triB=base+1 owns {1,2},{0,1}
-        add_line(v[0], v[1], col, base+1);
-        add_line(v[1], v[2], col, base+1);
-        add_line(v[2], v[3], col, base+0);
-        add_line(v[3], v[0], col, base+0);
-        // face 1 ({4,5,6,7}): triA=base+2 owns {4,5},{5,6}; triB=base+3 owns {6,7},{7,4}
-        add_line(v[4], v[5], col, base+2);
-        add_line(v[5], v[6], col, base+2);
-        add_line(v[6], v[7], col, base+3);
-        add_line(v[7], v[4], col, base+3);
-        // face 2 ({0,1,5,4}): triA=base+4 owns {1,5}; triB=base+5 owns {0,4}
-        add_line(v[1], v[5], col, base+4);
-        add_line(v[0], v[4], col, base+5);
-        // face 3 ({2,3,7,6}): triA=base+6 owns {3,7}; triB=base+7 owns {2,6}
-        add_line(v[3], v[7], col, base+6);
-        add_line(v[2], v[6], col, base+7);
+        auto e = [&](int i) { return !show_edges || show_edges[i]; };
+        // bottom edges (0-3)
+        if (e(0)) add_line(v[0], v[1], col, base+1);
+        if (e(1)) add_line(v[1], v[2], col, base+1);
+        if (e(2)) add_line(v[2], v[3], col, base+0);
+        if (e(3)) add_line(v[3], v[0], col, base+0);
+        // top edges (4-7)
+        if (e(4)) add_line(v[4], v[5], col, base+2);
+        if (e(5)) add_line(v[5], v[6], col, base+2);
+        if (e(6)) add_line(v[6], v[7], col, base+3);
+        if (e(7)) add_line(v[7], v[4], col, base+3);
+        // vertical edges (8-11)
+        if (e(8))  add_line(v[0], v[4], col, base+5);
+        if (e(9))  add_line(v[1], v[5], col, base+4);
+        if (e(10)) add_line(v[2], v[6], col, base+7);
+        if (e(11)) add_line(v[3], v[7], col, base+6);
     }
 
 // Adds a quad defined by 4 coplanar points, splitting it into two triangles.
@@ -103,206 +106,101 @@ struct Scene {
     void load_json(const std::string& path) {
         std::ifstream f(path);
         if (!f) throw std::runtime_error("Cannot open scene file: " + path);
-        std::string src((std::istreambuf_iterator<char>(f)),
-                         std::istreambuf_iterator<char>());
-        size_t pos = 0;
 
-        auto skip = [&] {
-            while (pos < src.size() && (src[pos]==' '||src[pos]=='\t'||
-                                        src[pos]=='\n'||src[pos]=='\r')) ++pos;
+        rapidjson::IStreamWrapper isw(f);
+        rapidjson::Document doc;
+        doc.ParseStream(isw);
+        if (doc.HasParseError())
+            throw std::runtime_error("JSON parse error in: " + path);
+
+        auto read_v3 = [](const rapidjson::Value& v) -> Vec3 {
+            return { v[0].GetDouble(), v[1].GetDouble(), v[2].GetDouble() };
         };
-        auto peek = [&]() -> char { skip(); return pos < src.size() ? src[pos] : '\0'; };
-        auto eat  = [&](char c) {
-            skip();
-            if (pos >= src.size() || src[pos] != c)
-                throw std::runtime_error(std::string("JSON: expected '") + c +
-                                         "' at pos " + std::to_string(pos));
-            ++pos;
-        };
-        auto read_string = [&]() -> std::string {
-            eat('"');
-            std::string s;
-            while (pos < src.size() && src[pos] != '"') {
-                if (src[pos] == '\\') { ++pos; if (pos < src.size()) s += src[pos]; }
-                else s += src[pos];
-                ++pos;
-            }
-            eat('"');
-            return s;
-        };
-        auto read_number = [&]() -> double {
-            skip();
-            size_t start = pos;
-            if (pos < src.size() && src[pos] == '-') ++pos;
-            while (pos < src.size() && std::isdigit((unsigned char)src[pos])) ++pos;
-            if (pos < src.size() && src[pos] == '.') {
-                ++pos;
-                while (pos < src.size() && std::isdigit((unsigned char)src[pos])) ++pos;
-            }
-            if (pos < src.size() && (src[pos]=='e'||src[pos]=='E')) {
-                ++pos;
-                if (pos < src.size() && (src[pos]=='+'||src[pos]=='-')) ++pos;
-                while (pos < src.size() && std::isdigit((unsigned char)src[pos])) ++pos;
-            }
-            return std::stod(src.substr(start, pos - start));
-        };
-        auto read_v3 = [&]() -> Vec3 {
-            eat('['); double x=read_number(); eat(','); double y=read_number();
-            eat(','); double z=read_number(); eat(']'); return {x,y,z};
-        };
-        auto read_col = [&]() -> color {
-            eat('['); double r=read_number(); eat(','); double g=read_number();
-            eat(','); double b=read_number(); eat(']');
-            return {(uint8_t)r,(uint8_t)g,(uint8_t)b};
-        };
-        // Skip an unknown JSON value (handles nesting).
-        std::function<void()> skip_val = [&]() {
-            char c = peek();
-            if (c == '"')      { read_string(); }
-            else if (c == '[') {
-                eat('[');
-                if (peek() != ']') { skip_val(); while (peek()==','){eat(','); skip_val();} }
-                eat(']');
-            } else if (c == '{') {
-                eat('{');
-                if (peek() != '}') {
-                    read_string(); eat(':'); skip_val();
-                    while (peek()==',') { eat(','); read_string(); eat(':'); skip_val(); }
-                }
-                eat('}');
-            } else if (c=='t') { pos+=4; } // true
-            else if (c=='f')   { pos+=5; } // false
-            else if (c=='n')   { pos+=4; } // null
-            else               { read_number(); }
+        auto read_col = [](const rapidjson::Value& v) -> color {
+            return { (uint8_t)v[0].GetInt(), (uint8_t)v[1].GetInt(), (uint8_t)v[2].GetInt() };
         };
 
-        eat('{');
-        while (peek() != '}') {
-            std::string key = read_string();
-            eat(':');
-            if (key == "show_intersection_lines") {
-                // read a boolean: true or false
-                skip();
-                if (src.compare(pos, 4, "true") == 0)  { show_intersection_lines = true;  pos += 4; }
-                else if (src.compare(pos, 5, "false") == 0) { show_intersection_lines = false; pos += 5; }
-                else skip_val();
-            } else if (key == "light_direction") {
-                light_direction = read_v3();
-            } else if (key == "camera") {
-                eat('{');
-                while (peek() != '}') {
-                    std::string k = read_string(); eat(':');
-                    if      (k=="position")     cam.position     = read_v3();
-                    else if (k=="target")       cam.target       = read_v3();
-                    else if (k=="up")           cam.up           = read_v3();
-                    else if (k=="fov")          cam.fov          = read_number();
-                    else if (k=="near")         cam.near         = read_number();
-                    else if (k=="far")          cam.far          = read_number();
-                    else if (k=="ortho_height") cam.ortho_height = read_number();
-                    else if (k=="projection") {
-                        std::string v = read_string();
-                        cam.proj_mode = (v == "orthographic") ? ProjectionMode::Orthographic
-                                                              : ProjectionMode::Perspective;
-                    } else skip_val();
-                    if (peek()==',') eat(',');
-                }
-                eat('}');
-            } else if (key == "lines") {
-                eat('[');
-                while (peek() != ']') {
-                    Vec3 a{}, b{}; color col{};
-                    eat('{');
-                    while (peek() != '}') {
-                        std::string k = read_string(); eat(':');
-                        if      (k=="a")   a   = read_v3();
-                        else if (k=="b")   b   = read_v3();
-                        else if (k=="col") col = read_col();
-                        else skip_val();
-                        if (peek()==',') eat(',');
-                    }
-                    eat('}');
-                    add_line(a, b, col);
-                    if (peek()==',') eat(',');
-                }
-                eat(']');
-            } else if (key == "triangles") {
-                eat('[');
-                while (peek() != ']') {
-                    Vec3 a{}, b{}, c{};
-                    eat('{');
-                    while (peek() != '}') {
-                        std::string k = read_string(); eat(':');
-                        if      (k=="a") a = read_v3();
-                        else if (k=="b") b = read_v3();
-                        else if (k=="c") c = read_v3();
-                        else skip_val();
-                        if (peek()==',') eat(',');
-                    }
-                    eat('}');
-                    add_triangle(a, b, c);
-                    if (peek()==',') eat(',');
-                }
-                eat(']');
-            } else if (key == "rectangles") {
-                eat('[');
-                while (peek() != ']') {
-                    Vec3 a{}, b{}, c{}, d{}; color col{};
-                    bool se[4] = {true, true, true, true};
-                    bool has_show_edges = false;
-                    eat('{');
-                    while (peek() != '}') {
-                        std::string k = read_string(); eat(':');
-                        if      (k=="a")   a   = read_v3();
-                        else if (k=="b")   b   = read_v3();
-                        else if (k=="c")   c   = read_v3();
-                        else if (k=="d")   d   = read_v3();
-                        else if (k=="col") col = read_col();
-                        else if (k=="show_edges") {
-                            eat('[');
-                            for (int i = 0; i < 4; ++i) {
-                                se[i] = (read_number() != 0.0);
-                                if (i < 3) eat(',');
-                            }
-                            eat(']');
-                            has_show_edges = true;
-                        }
-                        else skip_val();
-                        if (peek()==',') eat(',');
-                    }
-                    eat('}');
-                    // if no show_edges key, fall back to show_intersection_lines
-                    if (!has_show_edges) {
-                        for (int i = 0; i < 4; ++i) se[i] = show_intersection_lines;
-                    }
-                    add_rectangle(a, b, c, d, col, se);
-                    if (peek()==',') eat(',');
-                }
-                eat(']');
-            } else if (key == "blocks") {
-                eat('[');
-                while (peek() != ']') {
-                    Vec3 origin{}; double dx{},dy{},dz{}; color col{};
-                    eat('{');
-                    while (peek() != '}') {
-                        std::string k = read_string(); eat(':');
-                        if      (k=="origin") origin = read_v3();
-                        else if (k=="dx")     dx     = read_number();
-                        else if (k=="dy")     dy     = read_number();
-                        else if (k=="dz")     dz     = read_number();
-                        else if (k=="col")    col    = read_col();
-                        else skip_val();
-                        if (peek()==',') eat(',');
-                    }
-                    eat('}');
-                    add_block(origin, dx, dy, dz, col);
-                    if (peek()==',') eat(',');
-                }
-                eat(']');
-            } else {
-                skip_val();
+        if (doc.HasMember("show_intersection_lines"))
+            show_intersection_lines = doc["show_intersection_lines"].GetBool();
+
+        if (doc.HasMember("light_direction"))
+            light_direction = read_v3(doc["light_direction"]);
+
+        if (doc.HasMember("camera")) {
+            const auto& c = doc["camera"];
+            if (c.HasMember("position"))     cam.position     = read_v3(c["position"]);
+            if (c.HasMember("target"))       cam.target       = read_v3(c["target"]);
+            if (c.HasMember("up"))           cam.up           = read_v3(c["up"]);
+            if (c.HasMember("fov"))          cam.fov          = c["fov"].GetDouble();
+            if (c.HasMember("near"))         cam.near         = c["near"].GetDouble();
+            if (c.HasMember("far"))          cam.far          = c["far"].GetDouble();
+            if (c.HasMember("ortho_height")) cam.ortho_height = c["ortho_height"].GetDouble();
+            if (c.HasMember("projection")) {
+                std::string proj = c["projection"].GetString();
+                cam.proj_mode = (proj == "orthographic") ? ProjectionMode::Orthographic
+                                                         : ProjectionMode::Perspective;
             }
-            if (peek()==',') eat(',');
         }
-        eat('}');
+
+        if (doc.HasMember("lines")) {
+            for (const auto& obj : doc["lines"].GetArray()) {
+                Vec3 a{}, b{}; color col{};
+                if (obj.HasMember("a"))   a   = read_v3(obj["a"]);
+                if (obj.HasMember("b"))   b   = read_v3(obj["b"]);
+                if (obj.HasMember("col")) col = read_col(obj["col"]);
+                add_line(a, b, col);
+            }
+        }
+
+        if (doc.HasMember("triangles")) {
+            for (const auto& obj : doc["triangles"].GetArray()) {
+                Vec3 a{}, b{}, c{};
+                if (obj.HasMember("a")) a = read_v3(obj["a"]);
+                if (obj.HasMember("b")) b = read_v3(obj["b"]);
+                if (obj.HasMember("c")) c = read_v3(obj["c"]);
+                add_triangle(a, b, c);
+            }
+        }
+
+        if (doc.HasMember("rectangles")) {
+            for (const auto& obj : doc["rectangles"].GetArray()) {
+                Vec3 a{}, b{}, c{}, d{}; color col{};
+                bool se[4] = {true, true, true, true};
+                bool has_show_edges = false;
+                if (obj.HasMember("a"))   a   = read_v3(obj["a"]);
+                if (obj.HasMember("b"))   b   = read_v3(obj["b"]);
+                if (obj.HasMember("c"))   c   = read_v3(obj["c"]);
+                if (obj.HasMember("d"))   d   = read_v3(obj["d"]);
+                if (obj.HasMember("col")) col = read_col(obj["col"]);
+                if (obj.HasMember("show_edges")) {
+                    const auto& arr = obj["show_edges"].GetArray();
+                    for (int i = 0; i < 4; ++i) se[i] = (arr[i].GetDouble() != 0.0);
+                    has_show_edges = true;
+                }
+                // if no show_edges key, fall back to show_intersection_lines
+                if (!has_show_edges)
+                    for (int i = 0; i < 4; ++i) se[i] = show_intersection_lines;
+                add_rectangle(a, b, c, d, col, se);
+            }
+        }
+
+        if (doc.HasMember("blocks")) {
+            for (const auto& obj : doc["blocks"].GetArray()) {
+                Vec3 origin{}; double dx{}, dy{}, dz{}; color col{};
+                bool se[12] = {true,true,true,true,true,true,true,true,true,true,true,true};
+                bool has_show_edges = false;
+                if (obj.HasMember("origin")) origin = read_v3(obj["origin"]);
+                if (obj.HasMember("dx"))     dx     = obj["dx"].GetDouble();
+                if (obj.HasMember("dy"))     dy     = obj["dy"].GetDouble();
+                if (obj.HasMember("dz"))     dz     = obj["dz"].GetDouble();
+                if (obj.HasMember("col"))    col    = read_col(obj["col"]);
+                if (obj.HasMember("show_edges")) {
+                    const auto& arr = obj["show_edges"].GetArray();
+                    for (int i = 0; i < 12; ++i) se[i] = (arr[i].GetDouble() != 0.0);
+                    has_show_edges = true;
+                }
+                add_block(origin, dx, dy, dz, col, has_show_edges ? se : nullptr);
+            }
+        }
     }
 };
