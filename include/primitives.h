@@ -18,7 +18,8 @@ struct Line3D {
 
 struct Triangle3D {
     Vec3 a, b, c;
-    int  id = -1;   // index into Scene::triangles, assigned when added
+    int  id       = -1;   // index into Scene::triangles, assigned when added
+    int  group_id = -1;   // shared by all triangles from the same primitive (block/rectangle); -1 = ungrouped
     Vec3 normal() const { return (b - a).cross(c - a).normalized(); }
 };
 

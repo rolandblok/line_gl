@@ -8,6 +8,7 @@
 
 struct ProjectedTriangle {
     Vec3 a, b, c;   // xy = screen position, z = view-space depth (clip.w: positive, larger = closer)
+    int  group_id = -1;
 };
 
 struct ProjectedScene {
@@ -62,7 +63,10 @@ inline ProjectedScene project_scene_full(const Scene& scene, const Mat4& mvp,
         auto a = project_vertex(tri.a, mvp, width, height, view_mat);
         auto b = project_vertex(tri.b, mvp, width, height, view_mat);
         auto c = project_vertex(tri.c, mvp, width, height, view_mat);
-        if (a && b && c) ps.triangles.push_back({*a, *b, *c});
+        if (a && b && c) {
+            ps.triangles.push_back({*a, *b, *c});
+            ps.triangles.back().group_id = tri.group_id;
+        }
     }
     return ps;
 }

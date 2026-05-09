@@ -31,8 +31,11 @@ struct Scene {
     // show_edges[0..3]  = bottom edges: v0-v1, v1-v2, v2-v3, v3-v0
     // show_edges[4..7]  = top edges:    v4-v5, v5-v6, v6-v7, v7-v4
     // show_edges[8..11] = vertical:     v0-v4, v1-v5, v2-v6, v3-v7
+    // group_id: when >= 0, overrides the automatic per-primitive group with a
+    //           caller-supplied value; all primitives sharing the same group_id
+    //           will not generate triangle-intersection lines between them.
     void add_block(const Vec3& origin, double dx, double dy, double dz,
-                   color col = color{}, bool show_edges[12] = nullptr) {
+                   color col = color{}, bool show_edges[12] = nullptr, int group_id = -1) {
         Vec3 v[8] = {
             origin,
             origin + Vec3{dx,  0,  0},
@@ -58,6 +61,11 @@ struct Scene {
             add_triangle(v[f[0]], v[f[1]], v[f[2]]);  // triA
             add_triangle(v[f[0]], v[f[2]], v[f[3]]);  // triB
         }
+        // Tag all 12 triangles with a shared group so intra-block
+        // intersection lines are suppressed.
+        int gid = (group_id >= 0) ? group_id : base;
+        for (int i = base; i < (int)triangles.size(); ++i)
+            triangles[i].group_id = gid;
 
         // Edges with parent_tri set to one of the triangles they lie on.
         auto e = [&](int i) { return !show_edges || show_edges[i]; };
@@ -83,10 +91,12 @@ struct Scene {
     // triB = (a,c,d) owns outer edges c-d and d-a.
     // show_edges[0..3] = ab, bc, cd, da
     void add_rectangle(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d,
-                       color col = color{}, bool show_edges[4] = nullptr) {
+                       color col = color{}, bool show_edges[4] = nullptr, int group_id = -1) {
         int base = (int)triangles.size();
         add_triangle(a, b, c);  // triA = base+0
         add_triangle(a, c, d);  // triB = base+1
+        int gid = (group_id >= 0) ? group_id : base;
+        triangles[base].group_id = triangles[base+1].group_id = gid;
         bool defaults[4] = {true, true, true, true};
         bool* e = show_edges ? show_edges : defaults;
         if (e[0]) add_line(a, b, col, base+0);
@@ -180,7 +190,8 @@ struct Scene {
                 // if no show_edges key, fall back to show_intersection_lines
                 if (!has_show_edges)
                     for (int i = 0; i < 4; ++i) se[i] = show_intersection_lines;
-                add_rectangle(a, b, c, d, col, se);
+                int gid = obj.HasMember("group_id") ? obj["group_id"].GetInt() : -1;
+                add_rectangle(a, b, c, d, col, se, gid);
             }
         }
 
@@ -199,7 +210,8 @@ struct Scene {
                     for (int i = 0; i < 12; ++i) se[i] = (arr[i].GetDouble() != 0.0);
                     has_show_edges = true;
                 }
-                add_block(origin, dx, dy, dz, col, has_show_edges ? se : nullptr);
+                int gid = obj.HasMember("group_id") ? obj["group_id"].GetInt() : -1;
+                add_block(origin, dx, dy, dz, col, has_show_edges ? se : nullptr, gid);
             }
         }
     }

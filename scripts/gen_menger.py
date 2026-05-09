@@ -92,6 +92,7 @@ def build_scene(level: int) -> dict:
             "dz": round(size, 9),
             "col": [0, 0, 0],
             "show_edges": se,
+            "group_id": 0,
         })
 
     # Camera: elevated 3/4 view to show three faces

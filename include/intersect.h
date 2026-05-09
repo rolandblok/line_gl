@@ -129,6 +129,11 @@ inline void add_triangle_intersection_lines(ProjectedScene& pscene,
     const std::size_t n = pscene.triangles.size();
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = i + 1; j < n; ++j) {
+            // Skip pairs from the same primitive — their face-plane intersections
+            // are just the object's own edges, already handled by show_edges.
+            if (pscene.triangles[i].group_id != -1 &&
+                pscene.triangles[i].group_id == pscene.triangles[j].group_id)
+                continue;
             Line3D seg;
             if (projected_triangle_intersection(
                     pscene.triangles[i], pscene.triangles[j], seg)) {
