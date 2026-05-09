@@ -118,13 +118,13 @@ def build_scene(grid: list[list[float]], height_scale: float, no_edges: bool = F
                      grid[iz+1][ix] + grid[iz+1][ix+1]) / 4.0
             col = list(height_color(h_avg))
 
-            # Points wound counter-clockwise viewed from above:
-            # a=bottom-left, b=bottom-right, c=top-right, d=top-left
+            # Points wound counter-clockwise viewed from above (normal = +Y):
+            # a=bottom-left, b=top-left, c=top-right, d=bottom-right
             rect = {
                 "a": [x0, y00, z0],
-                "b": [x1, y10, z0],
+                "b": [x0, y01, z1],
                 "c": [x1, y11, z1],
-                "d": [x0, y01, z1],
+                "d": [x1, y10, z0],
                 "col": col
             }
             if no_edges:
@@ -169,8 +169,8 @@ def main():
     parser.add_argument("--height",    type=float, default=4.0, help="Max terrain height (default 4.0)")
     parser.add_argument("--out",       type=str,   default="scenes/heightfield.json",
                         help="Output path (default scenes/heightfield.json)")
-    parser.add_argument("--no-edges",  action="store_true",
-                        help="Do not draw triangle intersection lines")
+    parser.add_argument("--edges",  action="store_true",
+                        help="Draw quad/triangle intersection lines (hidden by default)")
     args = parser.parse_args()
 
     if args.size < 1 or args.size > 9:
@@ -182,8 +182,9 @@ def main():
           f"(roughness={args.roughness}, seed={args.seed})...")
 
     grid = diamond_square(args.size, args.roughness, rng)
-    scene = build_scene(grid, args.height, no_edges=args.no_edges)
-    if args.no_edges:
+    no_edges = not args.edges
+    scene = build_scene(grid, args.height, no_edges=no_edges)
+    if no_edges:
         set_no_edges(scene)
 
     out_path = Path(args.out)

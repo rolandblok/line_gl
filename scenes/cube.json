@@ -1,12 +1,13 @@
 {
     "camera": {
-        "position": [2.0, 1.5, 3.0],
-        "target":   [0.0, 0.0, 0.0],
+        "position": [4.0, 3.0, 6.0],
+        "target":   [1.5, 0.0, 0.0],
         "projection": "orthographic",
         "ortho_height": 2.5
     },
     "light_direction": [0.0, -1.0, -2.0],
     "blocks": [
-        { "origin": [-1,-1,-1], "dx": 2, "dy": 2, "dz": 2 }
+        { "origin": [-1,-1,-1], "dx": 2, "dy": 2, "dz": 2, "show_edges": [1,1,1,1,1,1,1,1,1,1,1,1] },
+        { "origin": [ 3,-1,-1], "dx": 2, "dy": 2, "dz": 2, "show_edges": [0,0,0,0,0,0,0,0,0,0,0,0] }
     ]
 }

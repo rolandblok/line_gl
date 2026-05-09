@@ -57,9 +57,11 @@ inline void add_hatching(Scene& scene,
     for (const auto& tri : scene.triangles) {
         Vec3 n = tri.normal();
 
-        // Back-face cull: skip triangles facing away from the camera.
-        Vec3 centroid = (tri.a + tri.b + tri.c) / 3.0;
-        if (n.dot(scene.cam.position - centroid) <= 0.0) continue;
+        // Back-face cull: skip triangles facing away from the camera
+        Vec3 view_vec = (scene.cam.proj_mode == ProjectionMode::Perspective)
+            ? (scene.cam.position - tri.a)
+            : (scene.cam.position - scene.cam.target);
+        if (n.dot(view_vec) <= 0.0) continue;
 
         // Shade: 0 = fully dark, 1 = fully lit
         double shade = std::clamp(-n.dot(light), 0.0, 1.0);

@@ -37,22 +37,6 @@ def menger_blocks(level: int, origin: tuple, size: float):
                     yield from menger_blocks(level - 1, sub_origin, sub)
 
 
-def height_color(y: float, total_size: float) -> list:
-    """Colour by normalised height: dark base to light top."""
-    h = y / total_size  # 0..1
-    stops = [
-        (0.0, (60,  70,  90)),
-        (0.5, (120, 130, 160)),
-        (1.0, (210, 215, 230)),
-    ]
-    for k in range(len(stops) - 1):
-        t0, c0 = stops[k]
-        t1, c1 = stops[k + 1]
-        if h <= t1:
-            t = (h - t0) / (t1 - t0)
-            return [int(c0[m] + t * (c1[m] - c0[m])) for m in range(3)]
-    return list(stops[-1][1])
-
 
 def build_scene(level: int) -> dict:
     total_size = 3.0  # world-space side length
@@ -73,8 +57,6 @@ def build_scene(level: int) -> dict:
 
     blocks = []
     for (ox, oy, oz), size in all_blocks:
-        col = height_color(oy + half, total_size)
-
         # Is each of the 6 faces exterior? (True = no neighbour on that side)
         ext_xn = not has_nb(ox, oy, oz, -1,  0,  0, size)
         ext_xp = not has_nb(ox, oy, oz,  1,  0,  0, size)
@@ -108,7 +90,7 @@ def build_scene(level: int) -> dict:
             "dx": round(size, 9),
             "dy": round(size, 9),
             "dz": round(size, 9),
-            "col": col,
+            "col": [0, 0, 0],
             "show_edges": se,
         })
 
