@@ -37,6 +37,7 @@ Config JSON keys (all optional – built-in defaults used for missing keys)
 """
 
 import argparse
+import math
 import json
 import os
 import sys
@@ -48,16 +49,21 @@ import xml.etree.ElementTree as ET
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG: dict = {
-    "feed_rate":       3000,
-    "pen_up_cmd":      "M5",
-    "pen_down_steps":  5,
-    "pen_down_start":  10,
-    "pen_down_end":    30,
-    "pen_down_dwell":  0.1,
-    "paper_width_mm":  105.0,
-    "paper_height_mm": 148.0,
-    "margin_mm":       10.0,
-    "flip_y":          True,
+    "feed_rate":        3000,
+    "rapid_rate":       6000,
+    "pen_up_cmd":       "M5",
+    "pen_down_steps":   5,
+    "pen_down_start":   10,
+    "pen_down_end":     30,
+    "pen_down_dwell":   0.1,
+    "paper_width_mm":   105.0,
+    "paper_height_mm":  148.0,
+    "margin_mm":        10.0,
+    "flip_y":           True,
+    "optimize_sort":    False,
+    "optimize_connect": False,
+    "optimize_reverse": False,
+    "connect_epsilon":  0.5,
 }
 
 
@@ -178,15 +184,93 @@ def pen_down_cmds(cfg: dict) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Path optimisation
+# ---------------------------------------------------------------------------
+
+def _dist2(ax: float, ay: float, bx: float, by: float) -> float:
+    dx, dy = ax - bx, ay - by
+    return dx * dx + dy * dy
+
+
+def optimize_lines(
+    lines: list[tuple[float, float, float, float]],
+    allow_reverse: bool,
+    epsilon: float,
+) -> tuple[list[tuple[float, float, float, float]], int, int]:
+    """Greedy nearest-neighbour sort of line segments.
+
+    Returns (ordered_lines, n_reversed, n_connected).
+      - n_reversed:  number of lines flipped to reduce travel.
+      - n_connected: number of pen-lifts avoided by a direct connection.
+    """
+    if not lines:
+        return [], 0, 0
+
+    eps2    = epsilon * epsilon
+    remaining = list(range(len(lines)))
+    ordered: list[tuple[float, float, float, float]] = []
+    n_reversed  = 0
+    n_connected = 0
+
+    # Start at origin
+    cur_x, cur_y = 0.0, 0.0
+
+    while remaining:
+        best_idx   = 0           # index into remaining[]
+        best_d2    = float("inf")
+        best_rev   = False
+
+        for ri, li in enumerate(remaining):
+            x1, y1, x2, y2 = lines[li]
+            d_fwd = _dist2(cur_x, cur_y, x1, y1)
+            if d_fwd < best_d2:
+                best_d2  = d_fwd
+                best_idx = ri
+                best_rev = False
+            if allow_reverse:
+                d_rev = _dist2(cur_x, cur_y, x2, y2)
+                if d_rev < best_d2:
+                    best_d2  = d_rev
+                    best_idx = ri
+                    best_rev = True
+
+        li = remaining.pop(best_idx)
+        x1, y1, x2, y2 = lines[li]
+        if best_rev:
+            x1, y1, x2, y2 = x2, y2, x1, y1
+            n_reversed += 1
+
+        if best_d2 <= eps2:
+            n_connected += 1
+
+        ordered.append((x1, y1, x2, y2))
+        cur_x, cur_y = x2, y2
+
+    return ordered, n_reversed, n_connected
+
+
+# ---------------------------------------------------------------------------
 # G-code generation
 # ---------------------------------------------------------------------------
 
 def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
                    cfg: dict) -> list[str]:
-    feed    = int(cfg["feed_rate"])
-    pen_up  = cfg["pen_up_cmd"].strip()
-    flip_y  = bool(cfg["flip_y"])
-    margin  = cfg["margin_mm"]
+    feed           = int(cfg["feed_rate"])
+    rapid          = int(cfg.get("rapid_rate", feed))
+    pen_up_cmd     = cfg["pen_up_cmd"].strip()
+    flip_y         = bool(cfg["flip_y"])
+    margin         = cfg["margin_mm"]
+    do_sort        = bool(cfg.get("optimize_sort",    False))
+    do_connect     = bool(cfg.get("optimize_connect", False))
+    do_reverse     = bool(cfg.get("optimize_reverse", False))
+    epsilon        = float(cfg.get("connect_epsilon", 0.5))
+
+    # optimisation implies sort
+    do_sort = do_sort or do_connect or do_reverse
+
+    n_rev = n_conn = 0
+    if do_sort:
+        svg_lines, n_rev, n_conn = optimize_lines(svg_lines, do_reverse, epsilon)
 
     bbox = scene_bbox(svg_lines)
     bx0, by0, bx1, by1 = bbox
@@ -196,6 +280,7 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
         return to_plotter(x_svg, y_svg, scale, x_off, y_off, draw_h, flip_y)
 
     down = pen_down_cmds(cfg)
+    eps2 = epsilon * epsilon
 
     out: list[str] = []
 
@@ -206,24 +291,76 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     out.append(f"; Paper:  {cfg['paper_width_mm']} x {cfg['paper_height_mm']} mm"
                f"  margin: {margin} mm")
     out.append(f"; Scale:  {scale:.6f} px->mm")
+    if do_sort:
+        flags = []
+        if do_reverse: flags.append("reverse")
+        if do_connect: flags.append("connect")
+        out.append(f"; Optimised: sort" + (f"+{'+'.join(flags)}" if flags else "") +
+                   f"  reversed={n_rev}  connected={n_conn}")
     out.append("G21          ; units: mm")
     out.append("G90          ; absolute positioning")
-    out.append(pen_up)
-    out.append("G0 X0 Y0     ; move to home")
+    out.append(pen_up_cmd)
+    out.append(f"G0 X0 Y0 F{rapid}     ; move to home")
 
     # --- line segments ---
+    # SVG-space position (for epsilon connectivity check)
+    svg_cur_x, svg_cur_y = 0.0, 0.0
+    # Plotter-space position (for travel distance)
+    plt_cur_x, plt_cur_y = 0.0, 0.0
+    pen_down = False
+    travel_up   = 0.0   # mm, pen lifted
+    travel_down = 0.0   # mm, pen drawing
+    n_lifts     = 0
+
+    def _mm_dist(ax: float, ay: float, bx: float, by: float) -> float:
+        return math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
+
     for x1, y1, x2, y2 in svg_lines:
         px1, py1 = pt(x1, y1)
         px2, py2 = pt(x2, y2)
 
-        out.append(pen_up)
-        out.append(f"G0 X{px1} Y{py1}")
-        out.extend(down)
+        connected = (do_connect and
+                     _dist2(svg_cur_x, svg_cur_y, x1, y1) <= eps2)
+
+        if not connected:
+            if pen_down:
+                out.append(pen_up_cmd)
+                pen_down = False
+                n_lifts += 1
+            travel_up += _mm_dist(plt_cur_x, plt_cur_y, px1, py1)
+            out.append(f"G0 X{px1} Y{py1} F{rapid}")
+            plt_cur_x, plt_cur_y = px1, py1
+
+        if not pen_down:
+            out.extend(down)
+            pen_down = True
+
         out.append(f"G1 X{px2} Y{py2} F{feed}")
+        travel_down += _mm_dist(plt_cur_x, plt_cur_y, px2, py2)
+        plt_cur_x, plt_cur_y = px2, py2
+        svg_cur_x, svg_cur_y = x2, y2
 
     # --- footer ---
-    out.append(pen_up)
-    out.append("G0 X0 Y0     ; return to home")
+    out.append(pen_up_cmd)
+    travel_up += _mm_dist(plt_cur_x, plt_cur_y, 0.0, 0.0)
+    out.append(f"G0 X0 Y0 F{rapid}     ; return to home")
+
+    # --- report ---
+    draw_secs   = (travel_down / feed)  * 60.0
+    travel_secs = (travel_up   / rapid) * 60.0
+    dwell_secs  = n_lifts * cfg["pen_down_steps"] * cfg["pen_down_dwell"]
+    total_secs  = draw_secs + travel_secs + dwell_secs
+
+    def fmt_time(s: float) -> str:
+        m, sec = divmod(int(s), 60)
+        h, m   = divmod(m, 60)
+        return f"{h}h {m:02d}m {sec:02d}s" if h else f"{m}m {sec:02d}s"
+
+    out.append(f"; --- Travel report ---")
+    out.append(f"; Pen-down travel : {travel_down:.1f} mm  @ {feed} mm/min  -> {fmt_time(draw_secs)}")
+    out.append(f"; Pen-up travel   : {travel_up:.1f} mm  @ {rapid} mm/min  -> {fmt_time(travel_secs)}")
+    out.append(f"; Pen lifts       : {n_lifts}  (dwell {fmt_time(dwell_secs)})")
+    out.append(f"; Estimated total : {fmt_time(total_secs)}")
 
     return out
 
@@ -269,10 +406,15 @@ def main() -> None:
         # Config resolution: explicit > gcode_config.json beside SVG > built-ins
         cfg_path = args.config
         if cfg_path is None:
-            candidate = os.path.join(os.path.dirname(os.path.abspath(svg_path)),
-                                     "gcode_config.json")
-            if os.path.isfile(candidate):
-                cfg_path = candidate
+            # Look for gcode_config.json: beside the SVG, then in cwd
+            for candidate_dir in [
+                os.path.dirname(os.path.abspath(svg_path)),
+                os.getcwd(),
+            ]:
+                candidate = os.path.join(candidate_dir, "gcode_config.json")
+                if os.path.isfile(candidate):
+                    cfg_path = candidate
+                    break
 
         cfg = load_config(cfg_path)
 
@@ -298,7 +440,12 @@ def main() -> None:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write("\n".join(gcode) + "\n")
 
+        # Extract report lines from end of gcode for console display
+        report = [l.lstrip("; ") for l in gcode
+                  if l.startswith("; Pen-") or l.startswith("; Pen lifts") or l.startswith("; Estimated")]
         print(f"  -> {out_path}  ({len(gcode)} lines)")
+        for r in report:
+            print(f"     {r}")
         out_path = None  # reset for next file
 
 

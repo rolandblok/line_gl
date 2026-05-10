@@ -2,5 +2,7 @@ bin/
 *.exe
 *.o
 *.obj
+*.pyc
+*.pyo
 svg/
 gcode/
