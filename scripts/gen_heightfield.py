@@ -146,6 +146,7 @@ def build_scene(grid: list[list[float]], height_scale: float, no_edges: bool = F
             "ortho_height": n_cells * 0.75
         },
         "light_direction": light_dir,
+        "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
         "rectangles": rectangles
     }
     return scene

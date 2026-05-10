@@ -37,21 +37,14 @@ inline bool clip_ray_to_triangle_3d(
 }
 
 // Adds hatch lines for all triangles in `scene` based on their shading
-// relative to scene.light_direction.
-//
-// Parameters:
-//   max_spacing  — spacing between hatch lines at shade = 0 (fully dark), world units
-//   min_spacing  — minimum spacing (dense end); lines are skipped below this
-//   shade_cutoff — faces brighter than this get no hatching (0..1)
-//   epsilon      — offset along normal to avoid z-fighting
-//   hatch_col    — colour of hatch lines
-inline void add_hatching(Scene& scene,
-                         double max_spacing  = 0.18,
-                         double min_spacing  = 0.1,
-                         double shade_cutoff = 0.95,
-                         double epsilon      = 0.001,
-                         color  hatch_col    = color{180, 180, 180})
+// relative to scene.light_direction. Parameters are read from scene.hatch.
+inline void add_hatching(Scene& scene)
 {
+    const double max_spacing  = scene.hatch.max_spacing;
+    const double min_spacing  = scene.hatch.min_spacing;
+    const double shade_cutoff = scene.hatch.shade_cutoff;
+    const double epsilon      = scene.hatch.epsilon;
+    const color  hatch_col    = scene.hatch.hatch_col;
     Vec3 light = scene.light_direction.normalized();
 
     for (const auto& tri : scene.triangles) {

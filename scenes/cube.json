@@ -6,6 +6,7 @@
         "ortho_height": 2.5
     },
     "light_direction": [0.0, -1.0, -2.0],
+    "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
     "blocks": [
         { "origin": [-1,-1,-1], "dx": 2, "dy": 2, "dz": 2, "show_edges": [1,1,1,1,1,1,1,1,1,1,1,1] },
         { "origin": [ 3,-1,-1], "dx": 2, "dy": 2, "dz": 2, "show_edges": [0,0,0,0,0,0,0,0,0,0,0,0] }

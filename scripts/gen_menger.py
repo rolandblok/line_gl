@@ -65,24 +65,34 @@ def build_scene(level: int) -> dict:
         ext_zn = not has_nb(ox, oy, oz,  0,  0, -1, size)
         ext_zp = not has_nb(ox, oy, oz,  0,  0,  1, size)
 
-        # An edge is visible when at least one of its two adjacent faces is exterior.
-        # Edge → (face_A, face_B):
+        # An edge is visible when the count of solid cells around its axis is odd
+        # (1 = convex corner, 3 = concave corner). Even counts mean a flat seam or
+        # interior edge and should be skipped.
+        # The 4 cells around each edge axis are: current block, the two face-direction
+        # neighbours, and the diagonal (face1+face2 direction) neighbour.
+        # Formula: draw if (int(ext_F1) + int(ext_F2) + int(has_diag)) % 2 == 0
+        #
+        # Edge → (face_A, face_B, diag_dx, diag_dy, diag_dz):
         #   0:z-,y-  1:z-,x+  2:z-,y+  3:z-,x-
         #   4:z+,y-  5:z+,x+  6:z+,y+  7:z+,x-
         #   8:x-,y-  9:x+,y-  10:x+,y+  11:x-,y+
+        def ev(ext_f1, ext_f2, ddx, ddy, ddz):
+            has_diag = has_nb(ox, oy, oz, ddx, ddy, ddz, size)
+            return int((int(ext_f1) + int(ext_f2) + int(has_diag)) % 2 == 0)
+
         se = [
-            int(ext_zn or ext_yn),   # e0
-            int(ext_zn or ext_xp),   # e1
-            int(ext_zn or ext_yp),   # e2
-            int(ext_zn or ext_xn),   # e3
-            int(ext_zp or ext_yn),   # e4
-            int(ext_zp or ext_xp),   # e5
-            int(ext_zp or ext_yp),   # e6
-            int(ext_zp or ext_xn),   # e7
-            int(ext_xn or ext_yn),   # e8
-            int(ext_xp or ext_yn),   # e9
-            int(ext_xp or ext_yp),   # e10
-            int(ext_xn or ext_yp),   # e11
+            ev(ext_zn, ext_yn,  0, -1, -1),  # e0:  z-, y-
+            ev(ext_zn, ext_xp,  1,  0, -1),  # e1:  z-, x+
+            ev(ext_zn, ext_yp,  0,  1, -1),  # e2:  z-, y+
+            ev(ext_zn, ext_xn, -1,  0, -1),  # e3:  z-, x-
+            ev(ext_zp, ext_yn,  0, -1,  1),  # e4:  z+, y-
+            ev(ext_zp, ext_xp,  1,  0,  1),  # e5:  z+, x+
+            ev(ext_zp, ext_yp,  0,  1,  1),  # e6:  z+, y+
+            ev(ext_zp, ext_xn, -1,  0,  1),  # e7:  z+, x-
+            ev(ext_xn, ext_yn, -1, -1,  0),  # e8:  x-, y-
+            ev(ext_xp, ext_yn,  1, -1,  0),  # e9:  x+, y-
+            ev(ext_xp, ext_yp,  1,  1,  0),  # e10: x+, y+
+            ev(ext_xn, ext_yp, -1,  1,  0),  # e11: x-, y+
         ]
 
         blocks.append({
@@ -104,6 +114,7 @@ def build_scene(level: int) -> dict:
             "ortho_height": 2.8
         },
         "light_direction": [1.0, -2.0, -0.5],
+        "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
         "blocks": blocks
     }
     return scene

@@ -54,9 +54,10 @@ int main(int argc, char* argv[]) {
             }
         }
 
-
-        SvgWriter svg_raw(out_raw.c_str(), W, H);
-        svg_raw.add_lines(project_scene(scene, mvp, W, H, view_mat), 1.5);
+        if (debug) {
+            SvgWriter svg_raw(out_raw.c_str(), W, H);
+            svg_raw.add_lines(project_scene(scene, mvp, W, H, view_mat), 1.5);
+        }
     };
 
     // Collect scene files: from arguments or all *.json in scenes/
@@ -72,7 +73,8 @@ int main(int argc, char* argv[]) {
     }
 
     for (const auto& path : scene_files) {
-        Scene s; s.load_json(path);
+        Scene s; 
+        s.load_json(path);
         add_hatching(s);
         render(s, path);
     }

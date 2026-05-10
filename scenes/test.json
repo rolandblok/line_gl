@@ -5,6 +5,7 @@
         "projection": "perspective",
         "fov": 1.0472
     },
+    "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
     "triangles": [
         { "a": [0,0,0], "b": [2,0,0], "c": [0,2,0] }
     ],

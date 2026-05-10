@@ -37,6 +37,7 @@ write("postcard_columns", {
         "ortho_height": 4.0
     },
     "light_direction": [1.0, -2.5, -0.5],
+    "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
     "blocks": [
         # platform
         {"origin": [-2.8, -0.5, -0.9], "dx": 5.6, "dy": 0.5, "dz": 1.8},
@@ -60,6 +61,7 @@ write("postcard_planes", {
         "ortho_height": 4.5
     },
     "light_direction": [0.8, -1.5, -0.6],
+    "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
     "rectangles": [
         # horizontal ground plane (y = 0)
         {"a": [-3.0, 0.0, -3.0], "b": [3.0, 0.0, -3.0],

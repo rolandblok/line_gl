@@ -4,6 +4,10 @@
 #include <sstream>
 #include <stdexcept>
 #include <cstdint>
+#include <cstdio>
+#include <algorithm>
+#include <array>
+#include <unordered_set>
 #include "vec_math.h"
 #include "primitives.h"
 #include "camera.h"
@@ -11,12 +15,21 @@
 #include "rapidjson/istreamwrapper.h"
 
 
+struct HatchParams {
+    double max_spacing  = 0.2;
+    double min_spacing  = 0.05;
+    double shade_cutoff = 0.95;
+    double epsilon      = 0.001;
+    color  hatch_col    = color{180, 180, 180};
+};
+
 struct Scene {
     std::vector<Line3D>     lines;
     std::vector<Triangle3D> triangles;
     Vec3                    light_direction = {0.0, -1.0, -1.0};  // world-space, not normalised
     Camera                  cam;
     bool                    show_intersection_lines = true;  // if false, skip add_triangle_intersection_lines
+    HatchParams             hatch;
 
     void add_line(const Vec3& a, const Vec3& b, color col = color{}, int parent_tri = -1) {
         lines.push_back({a, b, col});
@@ -133,6 +146,15 @@ struct Scene {
         if (doc.HasMember("show_intersection_lines"))
             show_intersection_lines = doc["show_intersection_lines"].GetBool();
 
+        if (doc.HasMember("hatching")) {
+            const auto& h = doc["hatching"];
+            if (h.HasMember("max_spacing"))  hatch.max_spacing  = h["max_spacing"].GetDouble();
+            if (h.HasMember("min_spacing"))  hatch.min_spacing  = h["min_spacing"].GetDouble();
+            if (h.HasMember("shade_cutoff")) hatch.shade_cutoff = h["shade_cutoff"].GetDouble();
+            if (h.HasMember("epsilon"))      hatch.epsilon      = h["epsilon"].GetDouble();
+            if (h.HasMember("color"))        hatch.hatch_col    = read_col(h["color"]);
+        }
+
         if (doc.HasMember("light_direction"))
             light_direction = read_v3(doc["light_direction"]);
 
@@ -214,5 +236,75 @@ struct Scene {
                 add_block(origin, dx, dy, dz, col, has_show_edges ? se : nullptr, gid);
             }
         }
+        remove_duplicates();
+    }
+
+    // Removes duplicate lines (same endpoints in either order, same colour) and
+    // duplicate triangles (same three vertices in any order).
+    void remove_duplicates() {
+        const size_t orig_lines = lines.size();
+        const size_t orig_tris  = triangles.size();
+        // -- lines --------------------------------------------------------
+        // Key: sort the two endpoint coords so A-B == B-A, then pack with colour.
+        auto line_key = [](const Line3D& l) -> std::tuple<
+                double,double,double,double,double,double,uint8_t,uint8_t,uint8_t> {
+            double ax = l.a.x, ay = l.a.y, az = l.a.z;
+            double bx = l.b.x, by = l.b.y, bz = l.b.z;
+            if (std::tie(ax,ay,az) > std::tie(bx,by,bz)) {
+                std::swap(ax,bx); std::swap(ay,by); std::swap(az,bz);
+            }
+            return {ax,ay,az,bx,by,bz,(double)l.col.x,(double)l.col.y,(double)l.col.z};
+        };
+        std::unordered_set<size_t> seen_lines;
+        std::vector<Line3D> unique_lines;
+        unique_lines.reserve(lines.size());
+        std::hash<double> dh;
+        for (const auto& l : lines) {
+            auto k = line_key(l);
+            // simple hash combine
+            size_t h = 0;
+            auto mix = [&](size_t v){ h ^= v + 0x9e3779b9 + (h<<6) + (h>>2); };
+            mix(dh(std::get<0>(k))); mix(dh(std::get<1>(k))); mix(dh(std::get<2>(k)));
+            mix(dh(std::get<3>(k))); mix(dh(std::get<4>(k))); mix(dh(std::get<5>(k)));
+            mix(dh(std::get<6>(k))); mix(dh(std::get<7>(k))); mix(dh(std::get<8>(k)));
+            if (seen_lines.insert(h).second)
+                unique_lines.push_back(l);
+        }
+        lines = std::move(unique_lines);
+
+        // -- triangles ----------------------------------------------------
+        // Key: sort the three vertices lexicographically then hash.
+        auto tri_key = [](const Triangle3D& t) -> std::array<double,9> {
+            std::array<std::array<double,3>,3> verts = {{
+                {t.a.x, t.a.y, t.a.z},
+                {t.b.x, t.b.y, t.b.z},
+                {t.c.x, t.c.y, t.c.z},
+            }};
+            std::sort(verts.begin(), verts.end());
+            return {verts[0][0],verts[0][1],verts[0][2],
+                    verts[1][0],verts[1][1],verts[1][2],
+                    verts[2][0],verts[2][1],verts[2][2]};
+        };
+        std::unordered_set<size_t> seen_tris;
+        std::vector<Triangle3D> unique_tris;
+        unique_tris.reserve(triangles.size());
+        for (const auto& t : triangles) {
+            auto k = tri_key(t);
+            size_t h = 0;
+            auto mix = [&](size_t v){ h ^= v + 0x9e3779b9 + (h<<6) + (h>>2); };
+            for (double v : k) mix(dh(v));
+            if (seen_tris.insert(h).second)
+                unique_tris.push_back(t);
+        }
+        triangles = std::move(unique_tris);
+        // Re-assign IDs after dedup since some entries may have been removed.
+        for (int i = 0; i < (int)triangles.size(); ++i)
+            triangles[i].id = i;
+
+        const size_t dup_lines = orig_lines - lines.size();
+        const size_t dup_tris  = orig_tris  - triangles.size();
+        if (dup_lines || dup_tris)
+            std::printf("remove_duplicates: removed %zu duplicate line(s), %zu duplicate triangle(s)\n",
+                        dup_lines, dup_tris);
     }
 };

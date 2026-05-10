@@ -109,6 +109,7 @@ def build_icosphere(radius: float, subdivisions: int) -> dict:
             "ortho_height": 8.0
         },
         "light_direction": [0.0, -1.0, -0.8],
+        "hatching": { "max_spacing": 0.2, "min_spacing": 0.05, "shade_cutoff": 0.95, "epsilon": 0.001, "color": [180, 180, 180] },
         "triangles": triangles
     }
     return scene
