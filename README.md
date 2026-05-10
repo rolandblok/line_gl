@@ -2,7 +2,7 @@
 
 A C++17 hidden-line renderer that produces clean SVG output suitable for pen plotting. Scenes are defined in JSON and rendered by projecting 3D geometry, removing hidden lines geometrically, and hatching visible surfaces.
 
-![Menger sponge — level 2](svg/postcard_menger.svg)
+![Menger sponge — level 2](postcard_menger.svg)
 
 *Menger sponge (level 2, 400 blocks) — hidden-line removal + hatching, rendered to SVG.*
 
