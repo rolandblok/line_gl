@@ -1,6 +1,10 @@
 # line_gl
 
-A C++17 hidden-line renderer that produces clean SVG output. Scenes are defined in JSON and rendered by projecting 3D geometry, removing hidden lines geometrically, and hatching visible surfaces.
+A C++17 hidden-line renderer that produces clean SVG output suitable for pen plotting. Scenes are defined in JSON and rendered by projecting 3D geometry, removing hidden lines geometrically, and hatching visible surfaces.
+
+![Menger sponge — level 2](svg/postcard_menger.svg)
+
+*Menger sponge (level 2, 400 blocks) — hidden-line removal + hatching, rendered to SVG.*
 
 ## Build & run
 
@@ -39,6 +43,49 @@ python scripts/gen_heightfield.py [--size N] [--roughness R] [--seed S] [--heigh
 |---|---|---|
 | `gen_sphere.py` | Icosphere (subdivided icosahedron) — equal-size triangles | `scenes/sphere.json` |
 | `gen_heightfield.py` | Diamond-square (plasma) — randomised terrain | `scenes/heightfield.json` |
+| `gen_menger.py` | Menger sponge — recursive cube subdivision | `scenes/postcard_menger.json` |
+
+## G-code export (pen plotter)
+
+Convert any rendered SVG to G-code with:
+
+```sh
+python scripts/svg_to_gcode.py              # converts all svg/*.svg -> gcode/
+python scripts/svg_to_gcode.py svg/foo.svg  # single file
+```
+
+Configure paper size, feed rates, pen-down servo ramp, and path optimisation in `gcode_config.json`:
+
+```json
+{
+    "feed_rate":        3000,
+    "rapid_rate":       6000,
+    "pen_up_cmd":       "M5",
+    "pen_down_steps":   5,
+    "pen_down_start":   10,
+    "pen_down_end":     30,
+    "pen_down_dwell":   0.1,
+    "paper_width_mm":   105.0,
+    "paper_height_mm":  148.0,
+    "margin_mm":        10.0,
+    "flip_y":           true,
+    "optimize_sort":    true,
+    "optimize_connect": true,
+    "optimize_reverse": true,
+    "connect_epsilon":  0.5
+}
+```
+
+The converter reports pen-down/pen-up travel and estimated plot duration:
+
+```
+postcard_menger.svg: 2689 segment(s)
+  -> gcode/postcard_menger.gcode  (12592 lines)
+     Pen-down travel : 7552.6 mm  @ 3000 mm/min  -> 2m 31s
+     Pen-up travel   : 1386.9 mm  @ 6000 mm/min  -> 0m 13s
+     Pen lifts       : 823  (dwell 6m 51s)
+     Estimated total : 9m 36s
+```
 
 ## Layout
 
@@ -46,6 +93,7 @@ python scripts/gen_heightfield.py [--size N] [--roughness R] [--seed S] [--heigh
 include/   header-only library
 src/       main.cpp
 scenes/    example JSON scenes
-scripts/   Python scene generators
-svg/       rendered output
+scripts/   Python scene generators + svg_to_gcode.py
+svg/       rendered SVG output
+gcode/     exported G-code for pen plotters
 ```
