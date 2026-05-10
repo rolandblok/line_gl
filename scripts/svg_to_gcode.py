@@ -54,8 +54,8 @@ DEFAULT_CONFIG: dict = {
     "pen_down_start":  10,
     "pen_down_end":    30,
     "pen_down_dwell":  0.1,
-    "paper_width_mm":  210.0,
-    "paper_height_mm": 297.0,
+    "paper_width_mm":  105.0,
+    "paper_height_mm": 148.0,
     "margin_mm":       10.0,
     "flip_y":          True,
 }
@@ -78,18 +78,10 @@ def load_config(path: str | None) -> dict:
 # SVG parsing
 # ---------------------------------------------------------------------------
 
-def parse_svg(path: str) -> tuple[list[tuple[float, float, float, float]], float, float]:
-    """Return (lines, svg_w, svg_h).
-
-    *lines* is a list of (x1, y1, x2, y2) in SVG pixel units.
-    Only <line> elements are extracted (linear moves).  Degenerate lines
-    (zero length) are silently dropped.
-    """
+def parse_svg(path: str) -> list[tuple[float, float, float, float]]:
+    """Return a list of (x1, y1, x2, y2) tuples in SVG pixel units."""
     tree = ET.parse(path)
     root = tree.getroot()
-
-    svg_w = float(root.attrib.get("width",  800))
-    svg_h = float(root.attrib.get("height", 600))
 
     lines: list[tuple[float, float, float, float]] = []
     for elem in root.iter():
@@ -102,46 +94,59 @@ def parse_svg(path: str) -> tuple[list[tuple[float, float, float, float]], float
             if (x1, y1) != (x2, y2):   # skip zero-length
                 lines.append((x1, y1, x2, y2))
 
-    return lines, svg_w, svg_h
+    return lines
+
+
+def scene_bbox(lines: list[tuple[float, float, float, float]]
+               ) -> tuple[float, float, float, float]:
+    """Return (min_x, min_y, max_x, max_y) of all line endpoints."""
+    xs = [x for x1, y1, x2, y2 in lines for x in (x1, x2)]
+    ys = [y for x1, y1, x2, y2 in lines for y in (y1, y2)]
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 # ---------------------------------------------------------------------------
 # Coordinate transform
 # ---------------------------------------------------------------------------
 
-def compute_transform(svg_w: float, svg_h: float, cfg: dict) -> tuple[float, float, float]:
-    """Compute (scale, x_off, y_top).
+def compute_transform(bbox: tuple[float, float, float, float],
+                      cfg: dict) -> tuple[float, float, float, float]:
+    """Compute (scale, x_off, y_off, bbox_h).
 
-    The drawing is scaled uniformly to fit inside the printable area
-    (paper minus margin on all sides) and centred within it.
+    Scales the drawing bounding box uniformly to fit inside the printable
+    area (paper minus margin) and centres it on the paper.
 
     Plotter coordinate system: origin bottom-left, Y up.
     SVG coordinate system:     origin top-left,    Y down.
 
-    ``y_top`` is the plotter Y value that corresponds to SVG y=0
-    (i.e. the top of the drawing on paper).
+    Returns scale and offsets so that a point (x, y) in SVG space maps to
+    plotter space via ``to_plotter``.
     """
+    bx0, by0, bx1, by1 = bbox
+    draw_w = bx1 - bx0
+    draw_h = by1 - by0
+
     margin      = cfg["margin_mm"]
     paper_w     = cfg["paper_width_mm"]
     paper_h     = cfg["paper_height_mm"]
     printable_w = paper_w  - 2.0 * margin
     printable_h = paper_h  - 2.0 * margin
 
-    scale   = min(printable_w / svg_w, printable_h / svg_h)
-    draw_w  = svg_w * scale
-    draw_h  = svg_h * scale
+    scale  = min(printable_w / draw_w, printable_h / draw_h)
 
-    x_off  = margin + (printable_w - draw_w) / 2.0
-    y_top  = paper_h - margin - (printable_h - draw_h) / 2.0
+    # centre the scaled drawing on the printable area
+    x_off  = margin + (printable_w - draw_w * scale) / 2.0 - bx0 * scale
+    y_off  = margin + (printable_h - draw_h * scale) / 2.0 - by0 * scale
 
-    return scale, x_off, y_top
+    return scale, x_off, y_off, draw_h
 
 
 def to_plotter(x_svg: float, y_svg: float,
-               scale: float, x_off: float, y_top: float,
-               flip_y: bool) -> tuple[float, float]:
+               scale: float, x_off: float, y_off: float,
+               draw_h: float, flip_y: bool) -> tuple[float, float]:
     x = x_off + x_svg * scale
-    y = (y_top - y_svg * scale) if flip_y else (y_top + y_svg * scale)
+    # flip_y: SVG y=by0 (top of drawing) -> plotter top; SVG y grows down
+    y = (y_off + (draw_h - (y_svg)) * scale) if flip_y else (y_off + y_svg * scale)
     return round(x, 4), round(y, 4)
 
 
@@ -177,17 +182,18 @@ def pen_down_cmds(cfg: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
-                   svg_w: float, svg_h: float,
                    cfg: dict) -> list[str]:
     feed    = int(cfg["feed_rate"])
     pen_up  = cfg["pen_up_cmd"].strip()
     flip_y  = bool(cfg["flip_y"])
     margin  = cfg["margin_mm"]
 
-    scale, x_off, y_top = compute_transform(svg_w, svg_h, cfg)
+    bbox = scene_bbox(svg_lines)
+    bx0, by0, bx1, by1 = bbox
+    scale, x_off, y_off, draw_h = compute_transform(bbox, cfg)
 
     def pt(x_svg: float, y_svg: float) -> tuple[float, float]:
-        return to_plotter(x_svg, y_svg, scale, x_off, y_top, flip_y)
+        return to_plotter(x_svg, y_svg, scale, x_off, y_off, draw_h, flip_y)
 
     down = pen_down_cmds(cfg)
 
@@ -195,7 +201,8 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
 
     # --- preamble ---
     out.append("; Generated by scripts/svg_to_gcode.py")
-    out.append(f"; Input:  {svg_w} x {svg_h} px  ({len(svg_lines)} segments)")
+    out.append(f"; Drawing bbox: ({bx0:.2f},{by0:.2f}) - ({bx1:.2f},{by1:.2f}) px"
+               f"  ({len(svg_lines)} segments)")
     out.append(f"; Paper:  {cfg['paper_width_mm']} x {cfg['paper_height_mm']} mm"
                f"  margin: {margin} mm")
     out.append(f"; Scale:  {scale:.6f} px->mm")
@@ -273,10 +280,12 @@ def main() -> None:
             print(f"Error: SVG file not found: {svg_path}", file=sys.stderr)
             sys.exit(1)
 
-        svg_lines, svg_w, svg_h = parse_svg(svg_path)
-        print(f"{os.path.basename(svg_path)}: {len(svg_lines)} segment(s)  ({svg_w} x {svg_h} px)")
+        svg_lines = parse_svg(svg_path)
+        bbox = scene_bbox(svg_lines)
+        print(f"{os.path.basename(svg_path)}: {len(svg_lines)} segment(s)  "
+              f"bbox ({bbox[0]:.1f},{bbox[1]:.1f})-({bbox[2]:.1f},{bbox[3]:.1f})")
 
-        gcode = generate_gcode(svg_lines, svg_w, svg_h, cfg)
+        gcode = generate_gcode(svg_lines, cfg)
 
         out_path = args.output
         if out_path is None:
