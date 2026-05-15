@@ -13,5 +13,6 @@
     "optimize_sort":    true,
     "optimize_connect": true,
     "optimize_reverse": true,
-    "connect_epsilon":  0.5
+    "connect_epsilon":  0.1,
+    "min_segment_mm":   0.5
 }

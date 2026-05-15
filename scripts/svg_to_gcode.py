@@ -8,12 +8,13 @@ Current capabilities
     preserving aspect ratio and centering the drawing.
   - Maps SVG coordinates (Y-down) to plotter coordinates (Y-up by default).
   - Generates G-code with a configurable pen-down servo ramp and pen-up command.
+  - Travel optimisation: sort segments by closest next endpoint, optionally
+    reverse segment direction, suppress pen up/down for connected endpoints.
+  - Filters out segments shorter than a configurable minimum length (mm).
 
 Planned (not yet implemented)
 ------------------------------
   - Bezier curve interpolation (<path> elements).
-  - Travel optimisation: sort lines by closest next endpoint, reverse line
-    direction when beneficial, suppress pen up/down for connected lines.
 
 Usage
 -----
@@ -34,6 +35,10 @@ Config JSON keys (all optional – built-in defaults used for missing keys)
     margin_mm       (float) : blank border around drawing (mm) [10.0]
     flip_y          (bool)  : flip Y axis (SVG Y-down ->        [true]
                               plotter Y-up)
+    min_segment_mm  (float) : discard segments shorter than this  [0.1]
+                              value in plotter mm
+    connect_epsilon (float) : max gap between endpoints to consider [0.5]
+                              connected, in plotter mm
 """
 
 import argparse
@@ -64,6 +69,7 @@ DEFAULT_CONFIG: dict = {
     "optimize_connect": False,
     "optimize_reverse": False,
     "connect_epsilon":  0.5,
+    "min_segment_mm":   0.1,
 }
 
 
@@ -192,61 +198,163 @@ def _dist2(ax: float, ay: float, bx: float, by: float) -> float:
     return dx * dx + dy * dy
 
 
+def _unit(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float]:
+    """Unit direction vector from (x1,y1) to (x2,y2); (1,0) if degenerate."""
+    dx, dy = x2 - x1, y2 - y1
+    length = math.sqrt(dx * dx + dy * dy)
+    if length < 1e-12:
+        return 1.0, 0.0
+    return dx / length, dy / length
+
+
 def optimize_lines(
     lines: list[tuple[float, float, float, float]],
     allow_reverse: bool,
     epsilon: float,
 ) -> tuple[list[tuple[float, float, float, float]], int, int]:
-    """Greedy nearest-neighbour sort of line segments.
+    """Two-phase optimiser: chain connected segments, then order chains.
+
+    Phase 1 – Chain building:
+        Starting from each unused segment, greedily extend the chain by finding
+        all segments whose start (or end, if allow_reverse) is within *epsilon*
+        of the chain tip.  When multiple candidates exist, the one whose
+        direction is most similar to the current draw direction is preferred
+        (highest dot product of unit vectors).
+
+    Phase 2 – Chain ordering:
+        The resulting chains are ordered with a nearest-neighbour greedy walk
+        from the origin, optionally reversing whole chains to minimise travel.
 
     Returns (ordered_lines, n_reversed, n_connected).
-      - n_reversed:  number of lines flipped to reduce travel.
-      - n_connected: number of pen-lifts avoided by a direct connection.
+      - n_reversed:  number of individual segments that were flipped.
+      - n_connected: number of within-chain connections (pen-lifts avoided).
     """
     if not lines:
         return [], 0, 0
 
-    eps2    = epsilon * epsilon
-    remaining = list(range(len(lines)))
-    ordered: list[tuple[float, float, float, float]] = []
-    n_reversed  = 0
+    eps2 = epsilon * epsilon
+    n_segs = len(lines)
+    used = [False] * n_segs
+    n_reversed = 0
     n_connected = 0
 
-    # Start at origin
+    # ---- Phase 1: build chains of directly-connected segments ----
+    chains: list[list[tuple[float, float, float, float]]] = []
+
+    for start_idx in range(n_segs):
+        if used[start_idx]:
+            continue
+
+        used[start_idx] = True
+        chain: list[tuple[float, float, float, float]] = [lines[start_idx]]
+
+        while True:
+            cx, cy = chain[-1][2], chain[-1][3]
+            cdx, cdy = _unit(chain[-1][0], chain[-1][1], cx, cy)
+
+            best_score = -2.0   # dot product; -1 = opposite, +1 = same dir
+            best_li    = -1
+            best_rev   = False
+
+            for li in range(n_segs):
+                if used[li]:
+                    continue
+                x1, y1, x2, y2 = lines[li]
+
+                # Forward attachment
+                if _dist2(cx, cy, x1, y1) <= eps2:
+                    dx, dy = _unit(x1, y1, x2, y2)
+                    score = dx * cdx + dy * cdy
+                    if score > best_score:
+                        best_score, best_li, best_rev = score, li, False
+
+                # Reverse attachment
+                if allow_reverse and _dist2(cx, cy, x2, y2) <= eps2:
+                    dx, dy = _unit(x2, y2, x1, y1)
+                    score = dx * cdx + dy * cdy
+                    if score > best_score:
+                        best_score, best_li, best_rev = score, li, True
+
+            if best_li == -1:
+                break   # no connectable neighbour
+
+            used[best_li] = True
+            x1, y1, x2, y2 = lines[best_li]
+            if best_rev:
+                chain.append((x2, y2, x1, y1))
+                n_reversed += 1
+            else:
+                chain.append((x1, y1, x2, y2))
+            n_connected += 1
+
+        chains.append(chain)
+
+    # ---- Phase 2: order chains by nearest-neighbour from origin ----
+    remaining = list(range(len(chains)))
+    ordered: list[tuple[float, float, float, float]] = []
     cur_x, cur_y = 0.0, 0.0
 
     while remaining:
-        best_idx   = 0           # index into remaining[]
-        best_d2    = float("inf")
-        best_rev   = False
+        best_ri   = 0
+        best_d2   = float("inf")
+        best_flip = False
 
-        for ri, li in enumerate(remaining):
-            x1, y1, x2, y2 = lines[li]
-            d_fwd = _dist2(cur_x, cur_y, x1, y1)
+        for ri, ci in enumerate(remaining):
+            sx, sy = chains[ci][0][0],  chains[ci][0][1]
+            ex, ey = chains[ci][-1][2], chains[ci][-1][3]
+
+            d_fwd = _dist2(cur_x, cur_y, sx, sy)
             if d_fwd < best_d2:
-                best_d2  = d_fwd
-                best_idx = ri
-                best_rev = False
+                best_d2, best_ri, best_flip = d_fwd, ri, False
+
             if allow_reverse:
-                d_rev = _dist2(cur_x, cur_y, x2, y2)
+                d_rev = _dist2(cur_x, cur_y, ex, ey)
                 if d_rev < best_d2:
-                    best_d2  = d_rev
-                    best_idx = ri
-                    best_rev = True
+                    best_d2, best_ri, best_flip = d_rev, ri, True
 
-        li = remaining.pop(best_idx)
-        x1, y1, x2, y2 = lines[li]
-        if best_rev:
-            x1, y1, x2, y2 = x2, y2, x1, y1
-            n_reversed += 1
+        ci    = remaining.pop(best_ri)
+        chain = chains[ci]
 
-        if best_d2 <= eps2:
-            n_connected += 1
+        if best_flip:
+            chain = [(x2, y2, x1, y1) for x1, y1, x2, y2 in reversed(chain)]
+            n_reversed += len(chain)
 
-        ordered.append((x1, y1, x2, y2))
-        cur_x, cur_y = x2, y2
+        ordered.extend(chain)
+        cur_x, cur_y = ordered[-1][2], ordered[-1][3]
 
     return ordered, n_reversed, n_connected
+
+
+# ---------------------------------------------------------------------------
+# Short-segment filter
+# ---------------------------------------------------------------------------
+
+def filter_short_lines(
+    lines: list[tuple[float, float, float, float]],
+    scale: float,
+    min_mm: float,
+) -> tuple[list[tuple[float, float, float, float]], int]:
+    """Remove segments whose plotter-space length is below *min_mm*.
+
+    *scale* is the SVG-px -> mm conversion factor produced by
+    ``compute_transform``.  The length threshold is converted back to SVG
+    units so the comparison stays in integer-friendly squared distances.
+
+    Returns (filtered_lines, n_removed).
+    """
+    if min_mm <= 0 or not lines:
+        return lines, 0
+    # (svg_len * scale) >= min_mm  <=>  svg_len^2 >= (min_mm / scale)^2
+    min_svg_sq = (min_mm / scale) ** 2
+    result: list[tuple[float, float, float, float]] = []
+    n_removed = 0
+    for seg in lines:
+        x1, y1, x2, y2 = seg
+        if _dist2(x1, y1, x2, y2) >= min_svg_sq:
+            result.append(seg)
+        else:
+            n_removed += 1
+    return result, n_removed
 
 
 # ---------------------------------------------------------------------------
@@ -267,10 +375,20 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
 
     # optimisation implies sort
     do_sort = do_sort or do_connect or do_reverse
+    min_seg = float(cfg.get("min_segment_mm", 0.1))
+
+    # Short-segment filter: compute a preliminary scale to get the mm/px ratio,
+    # then discard segments below the threshold before any further processing.
+    _bbox0 = scene_bbox(svg_lines)
+    _scale0, *_ = compute_transform(_bbox0, cfg)
+    svg_lines, n_short = filter_short_lines(svg_lines, _scale0, min_seg)
+
+    # Convert epsilon from mm to SVG pixel units for all proximity checks.
+    eps_svg = epsilon / _scale0
 
     n_rev = n_conn = 0
     if do_sort:
-        svg_lines, n_rev, n_conn = optimize_lines(svg_lines, do_reverse, epsilon)
+        svg_lines, n_rev, n_conn = optimize_lines(svg_lines, do_reverse, eps_svg)
 
     bbox = scene_bbox(svg_lines)
     bx0, by0, bx1, by1 = bbox
@@ -280,7 +398,7 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
         return to_plotter(x_svg, y_svg, scale, x_off, y_off, draw_h, flip_y)
 
     down = pen_down_cmds(cfg)
-    eps2 = epsilon * epsilon
+    eps2 = eps_svg * eps_svg
 
     out: list[str] = []
 
@@ -291,6 +409,8 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     out.append(f"; Paper:  {cfg['paper_width_mm']} x {cfg['paper_height_mm']} mm"
                f"  margin: {margin} mm")
     out.append(f"; Scale:  {scale:.6f} px->mm")
+    if n_short:
+        out.append(f"; Short segments removed: {n_short} (< {min_seg} mm)")
     if do_sort:
         flags = []
         if do_reverse: flags.append("reverse")
