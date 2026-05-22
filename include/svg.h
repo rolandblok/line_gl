@@ -17,7 +17,7 @@ struct SvgWriter {
     }
 
     void add_lines(const std::vector<Line3D>& lines,
-                   double stroke_width = 1.0f,
+                   double stroke_width = 0.2f,
                    bool debug_endpoints = false) {
         for (const auto& l : lines) {
             _file << "  <line"

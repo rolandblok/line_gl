@@ -329,31 +329,50 @@ def optimize_lines(
 # Short-segment filter
 # ---------------------------------------------------------------------------
 
-def filter_short_lines(
+def filter_short_chains(
     lines: list[tuple[float, float, float, float]],
     scale: float,
     min_mm: float,
+    eps_svg: float,
 ) -> tuple[list[tuple[float, float, float, float]], int]:
-    """Remove segments whose plotter-space length is below *min_mm*.
+    """Remove connected chains whose total plotter-space length is below *min_mm*.
 
-    *scale* is the SVG-px -> mm conversion factor produced by
-    ``compute_transform``.  The length threshold is converted back to SVG
-    units so the comparison stays in integer-friendly squared distances.
+    Consecutive segments that share an endpoint within *eps_svg* are treated
+    as a single chain.  The entire chain is kept or discarded based on its
+    cumulative length – individual short segments inside a longer chain are
+    never removed.
 
     Returns (filtered_lines, n_removed).
     """
     if min_mm <= 0 or not lines:
         return lines, 0
-    # (svg_len * scale) >= min_mm  <=>  svg_len^2 >= (min_mm / scale)^2
-    min_svg_sq = (min_mm / scale) ** 2
+
+    eps2 = eps_svg * eps_svg
+    min_svg = min_mm / scale
+
+    # Group consecutive segments into chains by shared endpoint proximity.
+    chains: list[list[tuple[float, float, float, float]]] = []
+    current: list[tuple[float, float, float, float]] = [lines[0]]
+    for seg in lines[1:]:
+        x1, y1 = seg[0], seg[1]
+        px2, py2 = current[-1][2], current[-1][3]
+        if _dist2(px2, py2, x1, y1) <= eps2:
+            current.append(seg)
+        else:
+            chains.append(current)
+            current = [seg]
+    chains.append(current)
+
+    # Keep chains whose total SVG-space length meets the threshold.
     result: list[tuple[float, float, float, float]] = []
     n_removed = 0
-    for seg in lines:
-        x1, y1, x2, y2 = seg
-        if _dist2(x1, y1, x2, y2) >= min_svg_sq:
-            result.append(seg)
+    for chain in chains:
+        total = sum(math.sqrt(_dist2(x1, y1, x2, y2)) for x1, y1, x2, y2 in chain)
+        if total >= min_svg:
+            result.extend(chain)
         else:
-            n_removed += 1
+            n_removed += len(chain)
+
     return result, n_removed
 
 
@@ -377,18 +396,24 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     do_sort = do_sort or do_connect or do_reverse
     min_seg = float(cfg.get("min_segment_mm", 0.1))
 
-    # Short-segment filter: compute a preliminary scale to get the mm/px ratio,
-    # then discard segments below the threshold before any further processing.
-    _bbox0 = scene_bbox(svg_lines)
-    _scale0, *_ = compute_transform(_bbox0, cfg)
-    svg_lines, n_short = filter_short_lines(svg_lines, _scale0, min_seg)
-
-    # Convert epsilon from mm to SVG pixel units for all proximity checks.
-    eps_svg = epsilon / _scale0
+    # Preliminary scale (full input bbox) – used only for the optimiser's
+    # epsilon, because the optimiser must run before the scale is finalised.
+    _scale0, *_ = compute_transform(scene_bbox(svg_lines), cfg)
+    eps_svg = epsilon / _scale0   # SVG-px equivalent of epsilon mm
 
     n_rev = n_conn = 0
     if do_sort:
         svg_lines, n_rev, n_conn = optimize_lines(svg_lines, do_reverse, eps_svg)
+
+    # After optimisation the bbox is stable.  Recompute scale here so that
+    # connect_epsilon and min_segment_mm are interpreted in final paper-mm
+    # coordinates, not the preliminary input-bbox scale.
+    _scale1, *_ = compute_transform(scene_bbox(svg_lines), cfg)
+    eps_svg1 = epsilon / _scale1
+
+    # Short-segment filter: operates on whole chains so that short segments
+    # within a longer chain are never discarded.
+    svg_lines, n_short = filter_short_chains(svg_lines, _scale1, min_seg, eps_svg1)
 
     bbox = scene_bbox(svg_lines)
     bx0, by0, bx1, by1 = bbox
@@ -398,7 +423,7 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
         return to_plotter(x_svg, y_svg, scale, x_off, y_off, draw_h, flip_y)
 
     down = pen_down_cmds(cfg)
-    eps2 = eps_svg * eps_svg
+    eps2 = eps_svg1 * eps_svg1
 
     out: list[str] = []
 

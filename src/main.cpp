@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
         std::cout << out << ": " << lines2d.size() << " segments\n";
 
         SvgWriter svg(out.c_str(), W, H);
-        svg.add_lines(lines2d, 1.0f, false);
+        svg.add_lines(lines2d, 0.2f, false);
 
         if (debug) {
             svg.add_lines(xyz_p.lines, 2.0f, false);

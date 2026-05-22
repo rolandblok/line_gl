@@ -17,6 +17,7 @@ Usage
 """
 
 import argparse
+import math
 import os
 import re
 import sys
@@ -127,6 +128,15 @@ def parse_gcode(path: str):
 SVG_NS = "http://www.w3.org/2000/svg"
 
 
+def _drawing_bbox(
+    draw_groups: list[list[tuple[float, float]]],
+) -> tuple[float, float, float, float] | None:
+    """Return (x0, y0, x1, y1) mm bounding box of all draw strokes, or None."""
+    xs = [x for g in draw_groups for x, y in g]
+    ys = [y for g in draw_groups for x, y in g]
+    return (min(xs), min(ys), max(xs), max(ys)) if xs else None
+
+
 def pts_to_str(points: list[tuple[float, float]], scale: float, h: float) -> str:
     """Convert plotter (x, y) mm coordinates to SVG pixel space.
 
@@ -191,6 +201,67 @@ def generate_svg(
             "stroke": colour,
             "points": pts_to_str(group, scale, paper_h),
         })
+
+    # --- ruler ticks around drawing bounding box ---
+    bbox_mm = _drawing_bbox(draw_groups)
+    if bbox_mm:
+        bx0, by0, bx1, by1 = bbox_mm
+        tick_sm = 1.0 * scale   # 1 mm tick length in px
+        tick_lg = 2.0 * scale   # 5 mm tick length in px
+
+        g_ruler = ET.SubElement(svg, "g", {
+            "id": "ruler",
+            "stroke": "#555555",
+            "stroke-width": "0.5",
+            "fill": "none",
+        })
+
+        # Thin dashed outline of the drawing bbox
+        ET.SubElement(g_ruler, "rect", {
+            "x":      f"{bx0 * scale:.3f}",
+            "y":      f"{(paper_h - by1) * scale:.3f}",
+            "width":  f"{(bx1 - bx0) * scale:.3f}",
+            "height": f"{(by1 - by0) * scale:.3f}",
+            "stroke": "#aaaaaa",
+            "stroke-dasharray": "4,2",
+        })
+
+        # Tick range extends 10 mm beyond the drawing bbox, clamped to paper.
+        RULER_MARGIN = 10.0
+        rx0 = max(0.0, bx0 - RULER_MARGIN)
+        rx1 = min(paper_w, bx1 + RULER_MARGIN)
+        ry0 = max(0.0, by0 - RULER_MARGIN)
+        ry1 = min(paper_h, by1 + RULER_MARGIN)
+
+        # X-axis ticks on top and bottom edges
+        svg_y_bot = (paper_h - by0) * scale
+        svg_y_top = (paper_h - by1) * scale
+        for xi in range(math.ceil(rx0 - 1e-9), math.floor(rx1 + 1e-9) + 1):
+            t = tick_lg if xi % 5 == 0 else tick_sm
+            sx = f"{xi * scale:.3f}"
+            ET.SubElement(g_ruler, "line", {
+                "x1": sx, "y1": f"{svg_y_bot:.3f}",
+                "x2": sx, "y2": f"{svg_y_bot + t:.3f}",
+            })
+            ET.SubElement(g_ruler, "line", {
+                "x1": sx, "y1": f"{svg_y_top:.3f}",
+                "x2": sx, "y2": f"{svg_y_top - t:.3f}",
+            })
+
+        # Y-axis ticks on left and right edges
+        svg_x_left  = bx0 * scale
+        svg_x_right = bx1 * scale
+        for yi in range(math.ceil(ry0 - 1e-9), math.floor(ry1 + 1e-9) + 1):
+            t = tick_lg if yi % 5 == 0 else tick_sm
+            sy = f"{(paper_h - yi) * scale:.3f}"
+            ET.SubElement(g_ruler, "line", {
+                "x1": f"{svg_x_left:.3f}",  "y1": sy,
+                "x2": f"{svg_x_left - t:.3f}",  "y2": sy,
+            })
+            ET.SubElement(g_ruler, "line", {
+                "x1": f"{svg_x_right:.3f}", "y1": sy,
+                "x2": f"{svg_x_right + t:.3f}", "y2": sy,
+            })
 
     return svg
 
