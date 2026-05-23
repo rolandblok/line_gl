@@ -216,51 +216,41 @@ def generate_svg(
             "fill": "none",
         })
 
-        # Thin dashed outline of the drawing bbox
-        ET.SubElement(g_ruler, "rect", {
-            "x":      f"{bx0 * scale:.3f}",
-            "y":      f"{(paper_h - by1) * scale:.3f}",
-            "width":  f"{(bx1 - bx0) * scale:.3f}",
-            "height": f"{(by1 - by0) * scale:.3f}",
-            "stroke": "#aaaaaa",
-            "stroke-dasharray": "4,2",
-        })
-
-        # Tick range extends 10 mm beyond the drawing bbox, clamped to paper.
+        # Tick range: drawing bbox extended by RULER_MARGIN, clamped to paper.
         RULER_MARGIN = 10.0
         rx0 = max(0.0, bx0 - RULER_MARGIN)
         rx1 = min(paper_w, bx1 + RULER_MARGIN)
         ry0 = max(0.0, by0 - RULER_MARGIN)
         ry1 = min(paper_h, by1 + RULER_MARGIN)
 
-        # X-axis ticks on top and bottom edges
-        svg_y_bot = (paper_h - by0) * scale
-        svg_y_top = (paper_h - by1) * scale
+        # X ruler: horizontal baseline RULER_MARGIN above the drawing top.
+        # Ticks point further upward.
+        svg_y_x_ruler = (paper_h - (by1 + RULER_MARGIN)) * scale
+        ET.SubElement(g_ruler, "line", {
+            "x1": f"{rx0 * scale:.3f}", "y1": f"{svg_y_x_ruler:.3f}",
+            "x2": f"{rx1 * scale:.3f}", "y2": f"{svg_y_x_ruler:.3f}",
+        })
         for xi in range(math.ceil(rx0 - 1e-9), math.floor(rx1 + 1e-9) + 1):
             t = tick_lg if xi % 5 == 0 else tick_sm
             sx = f"{xi * scale:.3f}"
             ET.SubElement(g_ruler, "line", {
-                "x1": sx, "y1": f"{svg_y_bot:.3f}",
-                "x2": sx, "y2": f"{svg_y_bot + t:.3f}",
-            })
-            ET.SubElement(g_ruler, "line", {
-                "x1": sx, "y1": f"{svg_y_top:.3f}",
-                "x2": sx, "y2": f"{svg_y_top - t:.3f}",
+                "x1": sx, "y1": f"{svg_y_x_ruler:.3f}",
+                "x2": sx, "y2": f"{svg_y_x_ruler + t:.3f}",
             })
 
-        # Y-axis ticks on left and right edges
-        svg_x_left  = bx0 * scale
-        svg_x_right = bx1 * scale
+        # Y ruler: vertical baseline RULER_MARGIN to the left of the drawing.
+        # Ticks point further leftward.
+        svg_x_y_ruler = (bx0 - RULER_MARGIN) * scale
+        ET.SubElement(g_ruler, "line", {
+            "x1": f"{svg_x_y_ruler:.3f}", "y1": f"{(paper_h - ry1) * scale:.3f}",
+            "x2": f"{svg_x_y_ruler:.3f}", "y2": f"{(paper_h - ry0) * scale:.3f}",
+        })
         for yi in range(math.ceil(ry0 - 1e-9), math.floor(ry1 + 1e-9) + 1):
             t = tick_lg if yi % 5 == 0 else tick_sm
             sy = f"{(paper_h - yi) * scale:.3f}"
             ET.SubElement(g_ruler, "line", {
-                "x1": f"{svg_x_left:.3f}",  "y1": sy,
-                "x2": f"{svg_x_left - t:.3f}",  "y2": sy,
-            })
-            ET.SubElement(g_ruler, "line", {
-                "x1": f"{svg_x_right:.3f}", "y1": sy,
-                "x2": f"{svg_x_right + t:.3f}", "y2": sy,
+                "x1": f"{svg_x_y_ruler:.3f}",     "y1": sy,
+                "x2": f"{svg_x_y_ruler + t:.3f}", "y2": sy,
             })
 
     return svg

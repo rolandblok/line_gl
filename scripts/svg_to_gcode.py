@@ -42,6 +42,7 @@ Config JSON keys (all optional – built-in defaults used for missing keys)
 """
 
 import argparse
+from collections import deque
 import math
 import json
 import os
@@ -162,6 +163,20 @@ def to_plotter(x_svg: float, y_svg: float,
     return round(x, 4), round(y, 4)
 
 
+def transform_lines(
+    lines: list[tuple[float, float, float, float]],
+    scale: float, x_off: float, y_off: float,
+    draw_h: float, flip_y: bool,
+) -> list[tuple[float, float, float, float]]:
+    """Convert SVG-space lines to plotter mm coordinates in one pass."""
+    result = []
+    for x1, y1, x2, y2 in lines:
+        px1, py1 = to_plotter(x1, y1, scale, x_off, y_off, draw_h, flip_y)
+        px2, py2 = to_plotter(x2, y2, scale, x_off, y_off, draw_h, flip_y)
+        result.append((px1, py1, px2, py2))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Pen-down ramp
 # ---------------------------------------------------------------------------
@@ -199,98 +214,184 @@ def _dist2(ax: float, ay: float, bx: float, by: float) -> float:
 
 
 def _unit(x1: float, y1: float, x2: float, y2: float) -> tuple[float, float]:
-    """Unit direction vector from (x1,y1) to (x2,y2); (1,0) if degenerate."""
+    """Unit direction vector from (x1,y1) to (x2,y2).
+
+    Returns (0, 0) for degenerate (zero-length) input so that dot-product
+    scoring treats the direction as unknown rather than biasing toward (1, 0).
+    """
     dx, dy = x2 - x1, y2 - y1
     length = math.sqrt(dx * dx + dy * dy)
     if length < 1e-12:
-        return 1.0, 0.0
+        return 0.0, 0.0
     return dx / length, dy / length
 
 
 def optimize_lines(
     lines: list[tuple[float, float, float, float]],
-    allow_reverse: bool,
     epsilon: float,
 ) -> tuple[list[tuple[float, float, float, float]], int, int]:
-    """Two-phase optimiser: chain connected segments, then order chains.
+    """Three-phase optimiser.
 
-    Phase 1 – Chain building:
-        Starting from each unused segment, greedily extend the chain by finding
-        all segments whose start (or end, if allow_reverse) is within *epsilon*
-        of the chain tip.  When multiple candidates exist, the one whose
-        direction is most similar to the current draw direction is preferred
-        (highest dot product of unit vectors).
+    Phase 1 – Collinear chain building:
+        For each unused segment, greedily extend the chain by finding connected
+        segments (within *epsilon*) whose direction matches the current chain
+        direction (dot product >= DIR_THRESHOLD).  Produces straight-run chains.
 
-    Phase 2 – Chain ordering:
-        The resulting chains are ordered with a nearest-neighbour greedy walk
+    Phase 2 – Chain junction:
+        Connect Phase-1 chains to each other wherever their endpoints meet
+        within *epsilon*, regardless of direction.  Handles corners and
+        direction changes between straight runs.
+
+    Phase 3 – Chain ordering:
+        Order the resulting super-chains with a nearest-neighbour greedy walk
         from the origin, optionally reversing whole chains to minimise travel.
 
     Returns (ordered_lines, n_reversed, n_connected).
       - n_reversed:  number of individual segments that were flipped.
-      - n_connected: number of within-chain connections (pen-lifts avoided).
+      - n_connected: number of connections where the pen stays down.
     """
+    # Dot-product threshold for "same direction" in Phase 1 (~8 degrees).
+    DIR_THRESHOLD = 0.99
+
     if not lines:
         return [], 0, 0
 
     eps2 = epsilon * epsilon
     n_segs = len(lines)
-    used = [False] * n_segs
     n_reversed = 0
     n_connected = 0
 
-    # ---- Phase 1: build chains of directly-connected segments ----
-    chains: list[list[tuple[float, float, float, float]]] = []
+    # ---- Phase 1: collinear chain building (connected + same direction) ----
+    used = [False] * n_segs
+    seg_chains: list[list[tuple[float, float, float, float]]] = []
 
     for start_idx in range(n_segs):
         if used[start_idx]:
             continue
 
         used[start_idx] = True
-        chain: list[tuple[float, float, float, float]] = [lines[start_idx]]
+        chain: deque[tuple[float, float, float, float]] = deque([lines[start_idx]])
 
-        while True:
+        extended = True
+        while extended:
+            extended = False
+
+            # --- extend tail ---
             cx, cy = chain[-1][2], chain[-1][3]
             cdx, cdy = _unit(chain[-1][0], chain[-1][1], cx, cy)
-
-            best_score = -2.0   # dot product; -1 = opposite, +1 = same dir
+            best_score = -2.0
             best_li    = -1
             best_rev   = False
-
             for li in range(n_segs):
                 if used[li]:
                     continue
                 x1, y1, x2, y2 = lines[li]
-
-                # Forward attachment
                 if _dist2(cx, cy, x1, y1) <= eps2:
                     dx, dy = _unit(x1, y1, x2, y2)
                     score = dx * cdx + dy * cdy
-                    if score > best_score:
+                    if score >= DIR_THRESHOLD and score > best_score:
                         best_score, best_li, best_rev = score, li, False
-
-                # Reverse attachment
-                if allow_reverse and _dist2(cx, cy, x2, y2) <= eps2:
+                if _dist2(cx, cy, x2, y2) <= eps2:
                     dx, dy = _unit(x2, y2, x1, y1)
                     score = dx * cdx + dy * cdy
-                    if score > best_score:
+                    if score >= DIR_THRESHOLD and score > best_score:
                         best_score, best_li, best_rev = score, li, True
+            if best_li != -1:
+                used[best_li] = True
+                x1, y1, x2, y2 = lines[best_li]
+                if best_rev:
+                    chain.append((x2, y2, x1, y1))
+                    n_reversed += 1
+                else:
+                    chain.append((x1, y1, x2, y2))
+                n_connected += 1
+                extended = True
 
-            if best_li == -1:
-                break   # no connectable neighbour
+            # --- extend head ---
+            hx, hy = chain[0][0], chain[0][1]
+            hdx, hdy = _unit(chain[0][0], chain[0][1], chain[0][2], chain[0][3])
+            best_score = -2.0
+            best_li    = -1
+            best_rev   = False
+            for li in range(n_segs):
+                if used[li]:
+                    continue
+                x1, y1, x2, y2 = lines[li]
+                # segment end attaches to head → prepend forward
+                if _dist2(hx, hy, x2, y2) <= eps2:
+                    dx, dy = _unit(x1, y1, x2, y2)
+                    score = dx * hdx + dy * hdy
+                    if score >= DIR_THRESHOLD and score > best_score:
+                        best_score, best_li, best_rev = score, li, False
+                # segment start attaches to head → prepend reversed
+                if _dist2(hx, hy, x1, y1) <= eps2:
+                    dx, dy = _unit(x2, y2, x1, y1)
+                    score = dx * hdx + dy * hdy
+                    if score >= DIR_THRESHOLD and score > best_score:
+                        best_score, best_li, best_rev = score, li, True
+            if best_li != -1:
+                used[best_li] = True
+                x1, y1, x2, y2 = lines[best_li]
+                if best_rev:
+                    chain.appendleft((x2, y2, x1, y1))
+                    n_reversed += 1
+                else:
+                    chain.appendleft((x1, y1, x2, y2))
+                n_connected += 1
+                extended = True
 
-            used[best_li] = True
-            x1, y1, x2, y2 = lines[best_li]
+        seg_chains.append(list(chain))
+
+    # ---- Phase 2: chain junction (connected, any direction) ----
+    n_chains = len(seg_chains)
+    chain_used = [False] * n_chains
+    super_chains: list[list[tuple[float, float, float, float]]] = []
+
+    for start_ci in range(n_chains):
+        if chain_used[start_ci]:
+            continue
+
+        chain_used[start_ci] = True
+        super_segs: list[tuple[float, float, float, float]] = list(seg_chains[start_ci])
+
+        while True:
+            cx, cy = super_segs[-1][2], super_segs[-1][3]
+
+            best_d2  = float("inf")
+            best_ci  = -1
+            best_rev = False
+
+            for ci in range(n_chains):
+                if chain_used[ci]:
+                    continue
+                sx, sy = seg_chains[ci][0][0],  seg_chains[ci][0][1]
+                ex, ey = seg_chains[ci][-1][2], seg_chains[ci][-1][3]
+
+                d_fwd = _dist2(cx, cy, sx, sy)
+                if d_fwd <= eps2 and d_fwd < best_d2:
+                    best_d2, best_ci, best_rev = d_fwd, ci, False
+
+                d_rev = _dist2(cx, cy, ex, ey)
+                if d_rev <= eps2 and d_rev < best_d2:
+                    best_d2, best_ci, best_rev = d_rev, ci, True
+
+            if best_ci == -1:
+                break
+
+            chain_used[best_ci] = True
             if best_rev:
-                chain.append((x2, y2, x1, y1))
-                n_reversed += 1
+                flipped = [(x2, y2, x1, y1)
+                           for x1, y1, x2, y2 in reversed(seg_chains[best_ci])]
+                super_segs.extend(flipped)
+                n_reversed += len(seg_chains[best_ci])
             else:
-                chain.append((x1, y1, x2, y2))
-            n_connected += 1
+                super_segs.extend(seg_chains[best_ci])
+            n_connected += 1   # one new junction per attached chain
 
-        chains.append(chain)
+        super_chains.append(super_segs)
 
-    # ---- Phase 2: order chains by nearest-neighbour from origin ----
-    remaining = list(range(len(chains)))
+    # ---- Phase 3: order super-chains by nearest-neighbour from origin ----
+    remaining = list(range(len(super_chains)))
     ordered: list[tuple[float, float, float, float]] = []
     cur_x, cur_y = 0.0, 0.0
 
@@ -300,20 +401,19 @@ def optimize_lines(
         best_flip = False
 
         for ri, ci in enumerate(remaining):
-            sx, sy = chains[ci][0][0],  chains[ci][0][1]
-            ex, ey = chains[ci][-1][2], chains[ci][-1][3]
+            sx, sy = super_chains[ci][0][0],  super_chains[ci][0][1]
+            ex, ey = super_chains[ci][-1][2], super_chains[ci][-1][3]
 
             d_fwd = _dist2(cur_x, cur_y, sx, sy)
             if d_fwd < best_d2:
                 best_d2, best_ri, best_flip = d_fwd, ri, False
 
-            if allow_reverse:
-                d_rev = _dist2(cur_x, cur_y, ex, ey)
-                if d_rev < best_d2:
-                    best_d2, best_ri, best_flip = d_rev, ri, True
+            d_rev = _dist2(cur_x, cur_y, ex, ey)
+            if d_rev < best_d2:
+                best_d2, best_ri, best_flip = d_rev, ri, True
 
         ci    = remaining.pop(best_ri)
-        chain = chains[ci]
+        chain = super_chains[ci]
 
         if best_flip:
             chain = [(x2, y2, x1, y1) for x1, y1, x2, y2 in reversed(chain)]
@@ -389,48 +489,36 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     margin         = cfg["margin_mm"]
     do_sort        = bool(cfg.get("optimize_sort",    False))
     do_connect     = bool(cfg.get("optimize_connect", False))
-    do_reverse     = bool(cfg.get("optimize_reverse", False))
     epsilon        = float(cfg.get("connect_epsilon", 0.5))
 
     # optimisation implies sort
-    do_sort = do_sort or do_connect or do_reverse
+    do_sort = do_sort or do_connect
     min_seg = float(cfg.get("min_segment_mm", 0.1))
 
-    # Preliminary scale (full input bbox) – used only for the optimiser's
-    # epsilon, because the optimiser must run before the scale is finalised.
-    _scale0, *_ = compute_transform(scene_bbox(svg_lines), cfg)
-    eps_svg = epsilon / _scale0   # SVG-px equivalent of epsilon mm
+    # Compute transform once from input bbox, then convert all lines to
+    # plotter mm-space so epsilon and min_segment_mm are used directly.
+    scale, x_off, y_off, draw_h = compute_transform(scene_bbox(svg_lines), cfg)
+    mm_lines = transform_lines(svg_lines, scale, x_off, y_off, draw_h, flip_y)
 
     n_rev = n_conn = 0
     if do_sort:
-        svg_lines, n_rev, n_conn = optimize_lines(svg_lines, do_reverse, eps_svg)
+        mm_lines, n_rev, n_conn = optimize_lines(mm_lines, epsilon)
 
-    # After optimisation the bbox is stable.  Recompute scale here so that
-    # connect_epsilon and min_segment_mm are interpreted in final paper-mm
-    # coordinates, not the preliminary input-bbox scale.
-    _scale1, *_ = compute_transform(scene_bbox(svg_lines), cfg)
-    eps_svg1 = epsilon / _scale1
+    # filter_short_chains: scale=1.0 because lines are already in mm.
+    mm_lines, n_short = filter_short_chains(mm_lines, 1.0, min_seg, epsilon)
 
-    # Short-segment filter: operates on whole chains so that short segments
-    # within a longer chain are never discarded.
-    svg_lines, n_short = filter_short_chains(svg_lines, _scale1, min_seg, eps_svg1)
-
-    bbox = scene_bbox(svg_lines)
+    bbox = scene_bbox(mm_lines)
     bx0, by0, bx1, by1 = bbox
-    scale, x_off, y_off, draw_h = compute_transform(bbox, cfg)
-
-    def pt(x_svg: float, y_svg: float) -> tuple[float, float]:
-        return to_plotter(x_svg, y_svg, scale, x_off, y_off, draw_h, flip_y)
+    eps2 = epsilon * epsilon
 
     down = pen_down_cmds(cfg)
-    eps2 = eps_svg1 * eps_svg1
 
     out: list[str] = []
 
     # --- preamble ---
     out.append("; Generated by scripts/svg_to_gcode.py")
-    out.append(f"; Drawing bbox: ({bx0:.2f},{by0:.2f}) - ({bx1:.2f},{by1:.2f}) px"
-               f"  ({len(svg_lines)} segments)")
+    out.append(f"; Drawing bbox: ({bx0:.2f},{by0:.2f}) - ({bx1:.2f},{by1:.2f}) mm"
+               f"  ({len(mm_lines)} segments)")
     out.append(f"; Paper:  {cfg['paper_width_mm']} x {cfg['paper_height_mm']} mm"
                f"  margin: {margin} mm")
     out.append(f"; Scale:  {scale:.6f} px->mm")
@@ -438,7 +526,6 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
         out.append(f"; Short segments removed: {n_short} (< {min_seg} mm)")
     if do_sort:
         flags = []
-        if do_reverse: flags.append("reverse")
         if do_connect: flags.append("connect")
         out.append(f"; Optimised: sort" + (f"+{'+'.join(flags)}" if flags else "") +
                    f"  reversed={n_rev}  connected={n_conn}")
@@ -448,10 +535,7 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     out.append(f"G0 X0 Y0 F{rapid}     ; move to home")
 
     # --- line segments ---
-    # SVG-space position (for epsilon connectivity check)
-    svg_cur_x, svg_cur_y = 0.0, 0.0
-    # Plotter-space position (for travel distance)
-    plt_cur_x, plt_cur_y = 0.0, 0.0
+    cur_x, cur_y = 0.0, 0.0   # current plotter position (mm)
     pen_down = False
     travel_up   = 0.0   # mm, pen lifted
     travel_down = 0.0   # mm, pen drawing
@@ -460,34 +544,29 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     def _mm_dist(ax: float, ay: float, bx: float, by: float) -> float:
         return math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
 
-    for x1, y1, x2, y2 in svg_lines:
-        px1, py1 = pt(x1, y1)
-        px2, py2 = pt(x2, y2)
-
-        connected = (do_connect and
-                     _dist2(svg_cur_x, svg_cur_y, x1, y1) <= eps2)
+    for x1, y1, x2, y2 in mm_lines:
+        connected = (do_connect and _dist2(cur_x, cur_y, x1, y1) <= eps2)
 
         if not connected:
             if pen_down:
                 out.append(pen_up_cmd)
                 pen_down = False
                 n_lifts += 1
-            travel_up += _mm_dist(plt_cur_x, plt_cur_y, px1, py1)
-            out.append(f"G0 X{px1} Y{py1} F{rapid}")
-            plt_cur_x, plt_cur_y = px1, py1
+            travel_up += _mm_dist(cur_x, cur_y, x1, y1)
+            out.append(f"G0 X{x1} Y{y1} F{rapid}")
+            cur_x, cur_y = x1, y1
 
         if not pen_down:
             out.extend(down)
             pen_down = True
 
-        out.append(f"G1 X{px2} Y{py2} F{feed}")
-        travel_down += _mm_dist(plt_cur_x, plt_cur_y, px2, py2)
-        plt_cur_x, plt_cur_y = px2, py2
-        svg_cur_x, svg_cur_y = x2, y2
+        out.append(f"G1 X{x2} Y{y2} F{feed}")
+        travel_down += _mm_dist(cur_x, cur_y, x2, y2)
+        cur_x, cur_y = x2, y2
 
     # --- footer ---
     out.append(pen_up_cmd)
-    travel_up += _mm_dist(plt_cur_x, plt_cur_y, 0.0, 0.0)
+    travel_up += _mm_dist(cur_x, cur_y, 0.0, 0.0)
     out.append(f"G0 X0 Y0 F{rapid}     ; return to home")
 
     # --- report ---
