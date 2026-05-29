@@ -46,6 +46,7 @@ from collections import deque
 import math
 import json
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 
@@ -91,12 +92,76 @@ def load_config(path: str | None) -> dict:
 # SVG parsing
 # ---------------------------------------------------------------------------
 
-def parse_svg(path: str) -> list[tuple[float, float, float, float]]:
-    """Return a list of (x1, y1, x2, y2) tuples in SVG pixel units."""
+def parse_svg(path: str) -> list[list[tuple[float, float, float, float]]]:
+    """Return a list of chains; each chain is a list of (x1, y1, x2, y2) segments.
+
+    Each <line> element produces a 1-segment chain.
+    Each <path> element produces one chain containing all its M/L segments.
+    Unsupported path commands (C, Q, A, …) are skipped with a warning.
+    """
     tree = ET.parse(path)
     root = tree.getroot()
 
-    lines: list[tuple[float, float, float, float]] = []
+    # Tokeniser for path d-attribute: command letters and numbers.
+    _PATH_TOKEN = re.compile(
+        r'([MmLlHhVvZz])|'
+        r'([-+]?(?:[0-9]*\.[0-9]+|[0-9]+)(?:[eE][-+]?[0-9]+)?)'
+    )
+    _UNSUPPORTED = re.compile(r'[CcQqAaSsTt]')
+
+    def _path_segments(d: str) -> list[tuple[float, float, float, float]]:
+        if _UNSUPPORTED.search(d):
+            print(f"  warning: skipping path with unsupported commands "
+                  f"({_UNSUPPORTED.search(d).group()})", file=sys.stderr)
+            return []
+        segs: list[tuple[float, float, float, float]] = []
+        tokens = [m.group() for m in _PATH_TOKEN.finditer(d)]
+        cx = cy = 0.0
+        i = 0
+        while i < len(tokens):
+            cmd = tokens[i]
+            if cmd in ('M', 'm'):
+                i += 1
+                x = float(tokens[i]); i += 1
+                y = float(tokens[i]); i += 1
+                cx, cy = (x, y) if cmd == 'M' else (cx + x, cy + y)
+                # Subsequent coordinate pairs after M are implicit L
+                while i < len(tokens) and tokens[i] not in 'MmLlHhVvZzCcQqAaSsTt':
+                    x = float(tokens[i]); i += 1
+                    y = float(tokens[i]); i += 1
+                    nx, ny = (x, y) if cmd == 'M' else (cx + x, cy + y)
+                    if (cx, cy) != (nx, ny):
+                        segs.append((cx, cy, nx, ny))
+                    cx, cy = nx, ny
+            elif cmd in ('L', 'l'):
+                i += 1
+                x = float(tokens[i]); i += 1
+                y = float(tokens[i]); i += 1
+                nx, ny = (x, y) if cmd == 'L' else (cx + x, cy + y)
+                if (cx, cy) != (nx, ny):
+                    segs.append((cx, cy, nx, ny))
+                cx, cy = nx, ny
+            elif cmd in ('H', 'h'):
+                i += 1
+                x = float(tokens[i]); i += 1
+                nx = x if cmd == 'H' else cx + x
+                if cx != nx:
+                    segs.append((cx, cy, nx, cy))
+                cx = nx
+            elif cmd in ('V', 'v'):
+                i += 1
+                y = float(tokens[i]); i += 1
+                ny = y if cmd == 'V' else cy + y
+                if cy != ny:
+                    segs.append((cx, cy, cx, ny))
+                cy = ny
+            elif cmd in ('Z', 'z'):
+                i += 1  # close path – no segment needed for pen plotter
+            else:
+                i += 1
+        return segs
+
+    chains: list[list[tuple[float, float, float, float]]] = []
     for elem in root.iter():
         tag = elem.tag.split("}")[-1]   # strip XML namespace prefix if present
         if tag == "line":
@@ -105,9 +170,15 @@ def parse_svg(path: str) -> list[tuple[float, float, float, float]]:
             x2 = float(elem.attrib.get("x2", 0))
             y2 = float(elem.attrib.get("y2", 0))
             if (x1, y1) != (x2, y2):   # skip zero-length
-                lines.append((x1, y1, x2, y2))
+                chains.append([(x1, y1, x2, y2)])
+        elif tag == "path":
+            d = elem.attrib.get("d", "").strip()
+            if d:
+                segs = _path_segments(d)
+                if segs:
+                    chains.append(segs)
 
-    return lines
+    return chains
 
 
 def scene_bbox(lines: list[tuple[float, float, float, float]]
@@ -123,8 +194,8 @@ def scene_bbox(lines: list[tuple[float, float, float, float]]
 # ---------------------------------------------------------------------------
 
 def compute_transform(bbox: tuple[float, float, float, float],
-                      cfg: dict) -> tuple[float, float, float, float]:
-    """Compute (scale, x_off, y_off, bbox_h).
+                      cfg: dict) -> tuple[float, float, float, float, float]:
+    """Compute (scale, x_off, y_off, svg_y0, svg_y1).
 
     Scales the drawing bounding box uniformly to fit inside the printable
     area (paper minus margin) and centres it on the paper.
@@ -133,7 +204,8 @@ def compute_transform(bbox: tuple[float, float, float, float],
     SVG coordinate system:     origin top-left,    Y down.
 
     Returns scale and offsets so that a point (x, y) in SVG space maps to
-    plotter space via ``to_plotter``.
+    plotter space via ``to_plotter``.  svg_y0/svg_y1 are the raw SVG bbox
+    min/max Y values needed for the correct flip-Y centring formula.
     """
     bx0, by0, bx1, by1 = bbox
     draw_w = bx1 - bx0
@@ -151,28 +223,29 @@ def compute_transform(bbox: tuple[float, float, float, float],
     x_off  = margin + (printable_w - draw_w * scale) / 2.0 - bx0 * scale
     y_off  = margin + (printable_h - draw_h * scale) / 2.0 - by0 * scale
 
-    return scale, x_off, y_off, draw_h
+    return scale, x_off, y_off, by0, by1
 
 
 def to_plotter(x_svg: float, y_svg: float,
                scale: float, x_off: float, y_off: float,
-               draw_h: float, flip_y: bool) -> tuple[float, float]:
+               svg_y0: float, svg_y1: float, flip_y: bool) -> tuple[float, float]:
     x = x_off + x_svg * scale
-    # flip_y: SVG y=by0 (top of drawing) -> plotter top; SVG y grows down
-    y = (y_off + (draw_h - (y_svg)) * scale) if flip_y else (y_off + y_svg * scale)
+    # flip_y: SVG y_min -> plotter top, SVG y_max -> plotter bottom.
+    # Correct centring: reflect around the bbox mid-point (svg_y0 + svg_y1).
+    y = (y_off + (svg_y0 + svg_y1 - y_svg) * scale) if flip_y else (y_off + y_svg * scale)
     return round(x, 4), round(y, 4)
 
 
 def transform_lines(
     lines: list[tuple[float, float, float, float]],
     scale: float, x_off: float, y_off: float,
-    draw_h: float, flip_y: bool,
+    svg_y0: float, svg_y1: float, flip_y: bool,
 ) -> list[tuple[float, float, float, float]]:
     """Convert SVG-space lines to plotter mm coordinates in one pass."""
     result = []
     for x1, y1, x2, y2 in lines:
-        px1, py1 = to_plotter(x1, y1, scale, x_off, y_off, draw_h, flip_y)
-        px2, py2 = to_plotter(x2, y2, scale, x_off, y_off, draw_h, flip_y)
+        px1, py1 = to_plotter(x1, y1, scale, x_off, y_off, svg_y0, svg_y1, flip_y)
+        px2, py2 = to_plotter(x2, y2, scale, x_off, y_off, svg_y0, svg_y1, flip_y)
         result.append((px1, py1, px2, py2))
     return result
 
@@ -426,6 +499,54 @@ def optimize_lines(
 
 
 # ---------------------------------------------------------------------------
+# Fast chain-level nearest-neighbour sort
+# ---------------------------------------------------------------------------
+
+def _sort_chains_nn(
+    chains: list[list[tuple[float, float, float, float]]],
+    allow_reverse: bool,
+) -> tuple[list[list[tuple[float, float, float, float]]], int]:
+    """Nearest-neighbour greedy sort of chains.
+
+    Picks the chain whose nearest endpoint is closest to the current pen
+    position.  Optionally flips the chain so its far end becomes the start.
+
+    Operates on *chains* (O(n_chains²)), not individual segments, making it
+    fast even for large drawings made of a moderate number of long paths.
+
+    Returns (sorted_chains, n_chains_reversed).
+    """
+    remaining = list(range(len(chains)))
+    result: list[list[tuple[float, float, float, float]]] = []
+    n_rev = 0
+    cx, cy = 0.0, 0.0
+
+    while remaining:
+        best_ri, best_d2, best_flip = 0, float("inf"), False
+        for ri, ci in enumerate(remaining):
+            c = chains[ci]
+            sx, sy = c[0][0],  c[0][1]
+            ex, ey = c[-1][2], c[-1][3]
+            d_fwd = _dist2(cx, cy, sx, sy)
+            if d_fwd < best_d2:
+                best_d2, best_ri, best_flip = d_fwd, ri, False
+            if allow_reverse:
+                d_rev = _dist2(cx, cy, ex, ey)
+                if d_rev < best_d2:
+                    best_d2, best_ri, best_flip = d_rev, ri, True
+
+        ci = remaining.pop(best_ri)
+        chain = chains[ci]
+        if best_flip:
+            chain = [(x2, y2, x1, y1) for x1, y1, x2, y2 in reversed(chain)]
+            n_rev += 1
+        result.append(chain)
+        cx, cy = result[-1][-1][2], result[-1][-1][3]
+
+    return result, n_rev
+
+
+# ---------------------------------------------------------------------------
 # Short-segment filter
 # ---------------------------------------------------------------------------
 
@@ -480,7 +601,7 @@ def filter_short_chains(
 # G-code generation
 # ---------------------------------------------------------------------------
 
-def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
+def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
                    cfg: dict) -> list[str]:
     feed           = int(cfg["feed_rate"])
     rapid          = int(cfg.get("rapid_rate", feed))
@@ -489,22 +610,32 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     margin         = cfg["margin_mm"]
     do_sort        = bool(cfg.get("optimize_sort",    False))
     do_connect     = bool(cfg.get("optimize_connect", False))
+    do_reverse     = bool(cfg.get("optimize_reverse", False))
     epsilon        = float(cfg.get("connect_epsilon", 0.5))
+    min_seg        = float(cfg.get("min_segment_mm", 0.1))
 
-    # optimisation implies sort
-    do_sort = do_sort or do_connect
-    min_seg = float(cfg.get("min_segment_mm", 0.1))
+    # Flatten all chains for bbox + transform computation
+    svg_lines = [seg for chain in svg_chains for seg in chain]
+    scale, x_off, y_off, svg_y0, svg_y1 = compute_transform(scene_bbox(svg_lines), cfg)
 
-    # Compute transform once from input bbox, then convert all lines to
-    # plotter mm-space so epsilon and min_segment_mm are used directly.
-    scale, x_off, y_off, draw_h = compute_transform(scene_bbox(svg_lines), cfg)
-    mm_lines = transform_lines(svg_lines, scale, x_off, y_off, draw_h, flip_y)
+    # Transform each chain to plotter mm-space
+    mm_chains: list[list[tuple[float, float, float, float]]] = [
+        transform_lines(chain, scale, x_off, y_off, svg_y0, svg_y1, flip_y)
+        for chain in svg_chains
+    ]
 
     n_rev = n_conn = 0
-    if do_sort:
-        mm_lines, n_rev, n_conn = optimize_lines(mm_lines, epsilon)
+    if do_connect:
+        # Full 3-phase optimiser on the flat segment list
+        flat = [seg for chain in mm_chains for seg in chain]
+        flat, n_rev, n_conn = optimize_lines(flat, epsilon)
+        mm_chains = [flat]
+    elif do_sort:
+        # Fast nearest-neighbour sort at chain level (O(n_chains²))
+        mm_chains, n_rev = _sort_chains_nn(mm_chains, allow_reverse=do_reverse)
 
-    # filter_short_chains: scale=1.0 because lines are already in mm.
+    # Flatten and filter short chains (scale=1.0 because lines are already in mm)
+    mm_lines = [seg for chain in mm_chains for seg in chain]
     mm_lines, n_short = filter_short_chains(mm_lines, 1.0, min_seg, epsilon)
 
     bbox = scene_bbox(mm_lines)
@@ -524,11 +655,10 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
     out.append(f"; Scale:  {scale:.6f} px->mm")
     if n_short:
         out.append(f"; Short segments removed: {n_short} (< {min_seg} mm)")
-    if do_sort:
-        flags = []
-        if do_connect: flags.append("connect")
-        out.append(f"; Optimised: sort" + (f"+{'+'.join(flags)}" if flags else "") +
-                   f"  reversed={n_rev}  connected={n_conn}")
+    if do_connect:
+        out.append(f"; Optimised: sort+connect  reversed={n_rev}  connected={n_conn}")
+    elif do_sort:
+        out.append(f"; Optimised: chain-sort  reversed={n_rev}")
     out.append("G21          ; units: mm")
     out.append("G90          ; absolute positioning")
     out.append(pen_up_cmd)
@@ -545,7 +675,8 @@ def generate_gcode(svg_lines: list[tuple[float, float, float, float]],
         return math.sqrt((bx - ax) ** 2 + (by - ay) ** 2)
 
     for x1, y1, x2, y2 in mm_lines:
-        connected = (do_connect and _dist2(cur_x, cur_y, x1, y1) <= eps2)
+        # Always suppress pen lift when the previous endpoint is within epsilon
+        connected = _dist2(cur_x, cur_y, x1, y1) <= eps2
 
         if not connected:
             if pen_down:
@@ -646,12 +777,14 @@ def main() -> None:
             print(f"Error: SVG file not found: {svg_path}", file=sys.stderr)
             sys.exit(1)
 
-        svg_lines = parse_svg(svg_path)
-        bbox = scene_bbox(svg_lines)
-        print(f"{os.path.basename(svg_path)}: {len(svg_lines)} segment(s)  "
+        svg_chains = parse_svg(svg_path)
+        n_segs = sum(len(c) for c in svg_chains)
+        flat_segs = [s for c in svg_chains for s in c]
+        bbox = scene_bbox(flat_segs)
+        print(f"{os.path.basename(svg_path)}: {len(svg_chains)} chain(s)  {n_segs} segment(s)  "
               f"bbox ({bbox[0]:.1f},{bbox[1]:.1f})-({bbox[2]:.1f},{bbox[3]:.1f})")
 
-        gcode = generate_gcode(svg_lines, cfg)
+        gcode = generate_gcode(svg_chains, cfg)
 
         out_path = args.output
         if out_path is None:
@@ -661,7 +794,7 @@ def main() -> None:
             out_path = os.path.normpath(os.path.join(gcode_dir, stem + ".gcode"))
 
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-        with open(out_path, "w", encoding="utf-8") as f:
+        with open(out_path, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(gcode) + "\n")
 
         # Extract report lines from end of gcode for console display

@@ -6,12 +6,13 @@
     "pen_down_start":   30,
     "pen_down_end":     30,
     "pen_down_dwell":   0.1,
-    "paper_height_mm":   105.0,
-    "paper_width_mm":  148.0,
+    
+    "paper_height_mm":   297.0,
+    "paper_width_mm":  210.0,
     "margin_mm":        10.0,
     "flip_y":           true,
     "optimize_sort":    true,
-    "optimize_connect": true,
+    "optimize_connect": false,
     "optimize_reverse": true,
     "connect_epsilon":  0.1,
     "min_segment_mm":   0.5
