@@ -40,11 +40,12 @@ inline bool clip_ray_to_triangle_3d(
 // relative to scene.light_direction. Parameters are read from scene.hatch.
 inline void add_hatching(Scene& scene)
 {
-    const double max_spacing  = scene.hatch.max_spacing;
-    const double min_spacing  = scene.hatch.min_spacing;
-    const double shade_cutoff = scene.hatch.shade_cutoff;
-    const double epsilon      = scene.hatch.epsilon;
-    const color  hatch_col    = scene.hatch.hatch_col;
+    const double max_spacing   = scene.hatch.max_spacing;
+    const double min_spacing   = scene.hatch.min_spacing;
+    const double shade_cutoff  = scene.hatch.shade_cutoff;
+    const double epsilon       = scene.hatch.epsilon;
+    const color  min_hatch_col = scene.hatch.min_hatch_col;
+    const color  max_hatch_col = scene.hatch.max_hatch_col;
     Vec3 light = scene.light_direction.normalized();
 
     for (const auto& tri : scene.triangles) {
@@ -63,6 +64,14 @@ inline void add_hatching(Scene& scene)
 
         // Spacing proportional to shade: dark → dense, bright → sparse
         double spacing = min_spacing + (max_spacing - min_spacing) * shade;
+
+        // Color lerp: shade=0 (dense/dark) → max_hatch_col, shade=shade_cutoff (sparse) → min_hatch_col
+        double t = (shade_cutoff > 0.0) ? shade / shade_cutoff : 0.0;
+        color line_col{
+            (int)(max_hatch_col.x + (min_hatch_col.x - max_hatch_col.x) * t),
+            (int)(max_hatch_col.y + (min_hatch_col.y - max_hatch_col.y) * t),
+            (int)(max_hatch_col.z + (min_hatch_col.z - max_hatch_col.z) * t)
+        };
 
         // Hatch direction: perpendicular to light projected onto face plane,
         // lying within the face.
@@ -101,7 +110,7 @@ inline void add_hatching(Scene& scene)
 
             Vec3 P0 = origin + hatch_dir * t0 + n * epsilon;
             Vec3 P1 = origin + hatch_dir * t1 + n * epsilon;
-            scene.add_line(P0, P1, hatch_col, tri.id);
+            scene.add_line(P0, P1, line_col, tri.id);
         }
     }
 }

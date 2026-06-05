@@ -39,10 +39,14 @@ Config JSON keys (all optional – built-in defaults used for missing keys)
                               value in plotter mm
     connect_epsilon (float) : max gap between endpoints to consider [0.5]
                               connected, in plotter mm
+    gray_min        (int)   : only keep chains whose stroke gray value  [0]
+                              is >= this (0-255); 0 = no lower bound
+    gray_max        (int)   : only keep chains whose stroke gray value  [255]
+                              is <= this (0-255); 255 = no upper bound
 """
 
 import argparse
-from collections import deque
+from collections import Counter, deque
 import math
 import json
 import os
@@ -72,9 +76,46 @@ DEFAULT_CONFIG: dict = {
     "optimize_reverse": False,
     "connect_epsilon":  0.5,
     "min_segment_mm":   0.1,
+    "gray_min":         0,
+    "gray_max":         255,
 }
 
 
+# ---------------------------------------------------------------------------
+# High-level processing sequence
+# ---------------------------------------------------------------------------
+#
+#  1. PARSE SVG          parse_svg()
+#                        Read <line> and <path> elements from the SVG.
+#                        Returns a list of chains (each chain = list of
+#                        (x1,y1,x2,y2) segments) plus a parallel list of
+#                        per-chain stroke colours (r,g,b).
+#
+#  2. COORDINATE FRAME   compute_transform()  [called once, shared by all outputs]
+#                        Fit the full drawing bbox into the paper area with
+#                        margins, centre it, compute uniform scale + offsets.
+#                        All output files (combined + per-gray) reuse this
+#                        single transform so they share the same physical frame.
+#
+#  3. GENERATE GCODE     generate_gcode()  [called once per output file]
+#     a. Gray filter     Keep only chains whose avg stroke grey is in
+#                        [gray_min, gray_max].
+#     b. Transform       Convert SVG-pixel chains to plotter mm-space using
+#                        the shared transform (flip Y if configured).
+#     c. Optimise        Optional: nearest-neighbour chain sort, collinear
+#                        chain merging, and full 3-phase connect optimiser.
+#     d. Short filter    Discard chains shorter than min_segment_mm.
+#     e. Emit G-code     Walk segments: suppress pen lift/lower for connected
+#                        endpoints; insert servo ramp on each pen-down.
+#                        Append a travel/time report as comments.
+#
+#  4. OUTPUTS            main()
+#                        - <stem>.gcode          all colours combined
+#                        - <stem>_gray_N.gcode   one file per unique grey
+#                                                value found in the SVG;
+#                                                each runs steps 3a-e
+#                                                independently for its layer.
+#
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
@@ -92,8 +133,28 @@ def load_config(path: str | None) -> dict:
 # SVG parsing
 # ---------------------------------------------------------------------------
 
-def parse_svg(path: str) -> list[list[tuple[float, float, float, float]]]:
-    """Return a list of chains; each chain is a list of (x1, y1, x2, y2) segments.
+def _parse_stroke_color(stroke: str) -> tuple[int, int, int]:
+    """Parse an SVG stroke attribute to (r, g, b). Returns (0,0,0) on failure."""
+    if not stroke:
+        return (0, 0, 0)
+    stroke = stroke.strip()
+    m = re.match(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', stroke)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r'#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$', stroke)
+    if m:
+        return (int(m.group(1), 16), int(m.group(2), 16), int(m.group(3), 16))
+    m = re.match(r'#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$', stroke)
+    if m:
+        return (int(m.group(1) * 2, 16), int(m.group(2) * 2, 16), int(m.group(3) * 2, 16))
+    return (0, 0, 0)
+
+
+def parse_svg(path: str) -> tuple[list[list[tuple[float, float, float, float]]], list[tuple[int, int, int]]]:
+    """Return (chains, colors).
+
+    chains: list of chains; each chain is a list of (x1, y1, x2, y2) segments.
+    colors: parallel list of (r, g, b) stroke colors, one per chain.
 
     Each <line> element produces a 1-segment chain.
     Each <path> element produces one chain containing all its M/L segments.
@@ -162,6 +223,7 @@ def parse_svg(path: str) -> list[list[tuple[float, float, float, float]]]:
         return segs
 
     chains: list[list[tuple[float, float, float, float]]] = []
+    colors: list[tuple[int, int, int]] = []
     for elem in root.iter():
         tag = elem.tag.split("}")[-1]   # strip XML namespace prefix if present
         if tag == "line":
@@ -171,14 +233,16 @@ def parse_svg(path: str) -> list[list[tuple[float, float, float, float]]]:
             y2 = float(elem.attrib.get("y2", 0))
             if (x1, y1) != (x2, y2):   # skip zero-length
                 chains.append([(x1, y1, x2, y2)])
+                colors.append(_parse_stroke_color(elem.attrib.get("stroke", "")))
         elif tag == "path":
             d = elem.attrib.get("d", "").strip()
             if d:
                 segs = _path_segments(d)
                 if segs:
                     chains.append(segs)
+                    colors.append(_parse_stroke_color(elem.attrib.get("stroke", "")))
 
-    return chains
+    return chains, colors
 
 
 def scene_bbox(lines: list[tuple[float, float, float, float]]
@@ -272,7 +336,8 @@ def pen_down_cmds(cfg: dict) -> list[str]:
     for i in range(steps):
         t  = i / max(steps - 1, 1)
         sv = int(round(s0 + (s1 - s0) * t))
-        result.append(f"M3 S{sv}")
+        comment = "  ; pen down" if i == 0 else ""
+        result.append(f"M3 S{sv}{comment}")
         result.append(f"G4 P{dwell}")
     return result
 
@@ -602,7 +667,9 @@ def filter_short_chains(
 # ---------------------------------------------------------------------------
 
 def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
-                   cfg: dict) -> list[str]:
+                   chain_colors: list[tuple[int, int, int]],
+                   cfg: dict,
+                   reference_transform: tuple | None = None) -> list[str]:
     feed           = int(cfg["feed_rate"])
     rapid          = int(cfg.get("rapid_rate", feed))
     pen_up_cmd     = cfg["pen_up_cmd"].strip()
@@ -613,10 +680,26 @@ def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
     do_reverse     = bool(cfg.get("optimize_reverse", False))
     epsilon        = float(cfg.get("connect_epsilon", 0.5))
     min_seg        = float(cfg.get("min_segment_mm", 0.1))
+    gray_min       = int(cfg.get("gray_min", 0))
+    gray_max       = int(cfg.get("gray_max", 255))
+
+    # Filter chains by stroke gray value (avg of r,g,b)
+    if gray_min > 0 or gray_max < 255:
+        n_before = len(svg_chains)
+        svg_chains = [
+            chain for chain, col in zip(svg_chains, chain_colors)
+            if gray_min <= (col[0] + col[1] + col[2]) // 3 <= gray_max
+        ]
+        n_filtered = n_before - len(svg_chains)
+    else:
+        n_filtered = 0
 
     # Flatten all chains for bbox + transform computation
     svg_lines = [seg for chain in svg_chains for seg in chain]
-    scale, x_off, y_off, svg_y0, svg_y1 = compute_transform(scene_bbox(svg_lines), cfg)
+    if reference_transform is not None:
+        scale, x_off, y_off, svg_y0, svg_y1 = reference_transform
+    else:
+        scale, x_off, y_off, svg_y0, svg_y1 = compute_transform(scene_bbox(svg_lines), cfg)
 
     # Transform each chain to plotter mm-space
     mm_chains: list[list[tuple[float, float, float, float]]] = [
@@ -653,6 +736,8 @@ def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
     out.append(f"; Paper:  {cfg['paper_width_mm']} x {cfg['paper_height_mm']} mm"
                f"  margin: {margin} mm")
     out.append(f"; Scale:  {scale:.6f} px->mm")
+    if n_filtered:
+        out.append(f"; Gray filter [{gray_min}-{gray_max}]: {n_filtered} chain(s) removed")
     if n_short:
         out.append(f"; Short segments removed: {n_short} (< {min_seg} mm)")
     if do_connect:
@@ -661,7 +746,7 @@ def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
         out.append(f"; Optimised: chain-sort  reversed={n_rev}")
     out.append("G21          ; units: mm")
     out.append("G90          ; absolute positioning")
-    out.append(pen_up_cmd)
+    out.append(f"{pen_up_cmd}          ; pen up")
     out.append(f"G0 X0 Y0 F{rapid}     ; move to home")
 
     # --- line segments ---
@@ -680,7 +765,7 @@ def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
 
         if not connected:
             if pen_down:
-                out.append(pen_up_cmd)
+                out.append(f"{pen_up_cmd}          ; pen up")
                 pen_down = False
                 n_lifts += 1
             travel_up += _mm_dist(cur_x, cur_y, x1, y1)
@@ -696,7 +781,7 @@ def generate_gcode(svg_chains: list[list[tuple[float, float, float, float]]],
         cur_x, cur_y = x2, y2
 
     # --- footer ---
-    out.append(pen_up_cmd)
+    out.append(f"{pen_up_cmd}          ; pen up")
     travel_up += _mm_dist(cur_x, cur_y, 0.0, 0.0)
     out.append(f"G0 X0 Y0 F{rapid}     ; return to home")
 
@@ -777,14 +862,28 @@ def main() -> None:
             print(f"Error: SVG file not found: {svg_path}", file=sys.stderr)
             sys.exit(1)
 
-        svg_chains = parse_svg(svg_path)
+        svg_chains, chain_colors = parse_svg(svg_path)
         n_segs = sum(len(c) for c in svg_chains)
         flat_segs = [s for c in svg_chains for s in c]
         bbox = scene_bbox(flat_segs)
         print(f"{os.path.basename(svg_path)}: {len(svg_chains)} chain(s)  {n_segs} segment(s)  "
               f"bbox ({bbox[0]:.1f},{bbox[1]:.1f})-({bbox[2]:.1f},{bbox[3]:.1f})")
 
-        gcode = generate_gcode(svg_chains, cfg)
+        gray_min_cfg = int(cfg.get("gray_min", 0))
+        gray_max_cfg = int(cfg.get("gray_max", 255))
+        color_counts = Counter(chain_colors)
+        for col, count in sorted(color_counts.items(),
+                                 key=lambda kv: (kv[0][0] + kv[0][1] + kv[0][2]) // 3):
+            gray = (col[0] + col[1] + col[2]) // 3
+            marker = "*" if gray_min_cfg <= gray <= gray_max_cfg else " "
+            print(f"  {marker} rgb({col[0]:3d},{col[1]:3d},{col[2]:3d})  gray={gray:3d}  {count:5d} chain(s)")
+
+        # Compute reference transform once from ALL chains so every output
+        # (combined + per-gray) shares the same coordinate frame.
+        all_svg_lines = [seg for chain in svg_chains for seg in chain]
+        ref_transform = compute_transform(scene_bbox(all_svg_lines), cfg)
+
+        gcode = generate_gcode(svg_chains, chain_colors, cfg, ref_transform)
 
         out_path = args.output
         if out_path is None:
@@ -803,6 +902,28 @@ def main() -> None:
         print(f"  -> {out_path}  ({len(gcode)} lines)")
         for r in report:
             print(f"     {r}")
+
+        # Per-gray gcode files: one per unique gray value present in the SVG.
+        # Each runs the full pipeline (optimisation, short-segment filter) on
+        # only that gray's chains, so connections are recalculated correctly.
+        base_path, ext = os.path.splitext(os.path.abspath(out_path))
+        unique_grays = sorted(set((col[0] + col[1] + col[2]) // 3 for col in chain_colors))
+        for gray in unique_grays:
+            gray_cfg = dict(cfg)
+            gray_cfg["gray_min"] = gray
+            gray_cfg["gray_max"] = gray
+            gray_gcode = generate_gcode(svg_chains, chain_colors, gray_cfg, ref_transform)
+            gray_path = f"{base_path}_gray_{gray}{ext}"
+            with open(gray_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(gray_gcode) + "\n")
+            gray_report = [l.lstrip("; ") for l in gray_gcode
+                           if l.startswith("; Pen-") or l.startswith("; Pen lifts")
+                           or l.startswith("; Estimated")]
+            n_gray = sum(1 for col in chain_colors if (col[0] + col[1] + col[2]) // 3 == gray)
+            print(f"  -> {gray_path}  (gray={gray}, {n_gray} chains)")
+            for r in gray_report:
+                print(f"     {r}")
+
         out_path = None  # reset for next file
 
 

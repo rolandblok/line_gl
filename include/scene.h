@@ -20,7 +20,8 @@ struct HatchParams {
     double min_spacing  = 0.05;
     double shade_cutoff = 0.95;
     double epsilon      = 0.001;
-    color  hatch_col    = color{180, 180, 180};
+    color  min_hatch_col = color{180, 180, 180};  // color at lowest/sparsest hatching
+    color  max_hatch_col = color{60,  60,  60};   // color at highest/densest hatching
 };
 
 struct Scene {
@@ -152,7 +153,8 @@ struct Scene {
             if (h.HasMember("min_spacing"))  hatch.min_spacing  = h["min_spacing"].GetDouble();
             if (h.HasMember("shade_cutoff")) hatch.shade_cutoff = h["shade_cutoff"].GetDouble();
             if (h.HasMember("epsilon"))      hatch.epsilon      = h["epsilon"].GetDouble();
-            if (h.HasMember("color"))        hatch.hatch_col    = read_col(h["color"]);
+            if (h.HasMember("min_color"))    hatch.min_hatch_col = read_col(h["min_color"]);
+            if (h.HasMember("max_color"))    hatch.max_hatch_col = read_col(h["max_color"]);
         }
 
         if (doc.HasMember("light_direction"))

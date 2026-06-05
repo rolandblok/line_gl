@@ -20,7 +20,7 @@
     ],
     "hatching": {
         "max_spacing": 0.2,
-        "min_spacing": 0.05,
+        "min_spacing": 0.2,
         "shade_cutoff": 0.95,
         "epsilon": 0.001,
         "color": [
