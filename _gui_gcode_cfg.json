@@ -1,0 +1,17 @@
+{
+    "feed_rate": 3000,
+    "rapid_rate": 3000,
+    "paper_width_mm": 210.0,
+    "paper_height_mm": 297.0,
+    "margin_mm": 10.0,
+    "pen_up_cmd": "M3 S20",
+    "pen_down_steps": 1,
+    "pen_down_start": 40,
+    "pen_down_end": 40,
+    "pen_down_dwell": 0.1,
+    "min_segment_mm": 0.5,
+    "flip_y": true,
+    "optimize_sort": true,
+    "optimize_connect": true,
+    "optimize_reverse": true
+}

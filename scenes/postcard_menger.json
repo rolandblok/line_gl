@@ -20,13 +20,18 @@
     ],
     "hatching": {
         "max_spacing": 0.2,
-        "min_spacing": 0.2,
+        "min_spacing": 0.4,
         "shade_cutoff": 0.95,
         "epsilon": 0.001,
-        "color": [
+        "min_color": [
             180,
             180,
             180
+        ],
+        "max_color": [
+            60,
+            60,
+            60
         ]
     },
     "blocks": [
