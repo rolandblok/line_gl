@@ -31,6 +31,8 @@ struct Scene {
     Camera                  cam;
     bool                    show_intersection_lines = true;  // if false, skip add_triangle_intersection_lines
     HatchParams             hatch;
+    double                  canvas_w = 800.0;   // output SVG size in px; also sets
+    double                  canvas_h = 600.0;   // the aspect ratio of the projection
 
     void add_line(const Vec3& a, const Vec3& b, color col = color{}, int parent_tri = -1) {
         lines.push_back({a, b, col});
@@ -126,6 +128,7 @@ struct Scene {
     //     "triangles":  [{ "a":[x,y,z], "b":[x,y,z], "c":[x,y,z]  }, ...],
     //     "rectangles": [{ "a":[x,y,z], "b":[x,y,z], "c":[x,y,z], "d":[x,y,z], "col":[r,g,b], "show_edges":[1,1,1,1] }, ...],
     //     "blocks":     [{ "origin":[x,y,z], "dx":n, "dy":n, "dz":n, "col":[r,g,b] }, ...],
+    //     "canvas":     { "width":800, "height":600 },
     //     "show_intersection_lines": true|false }
     void load_json(const std::string& path) {
         std::ifstream f(path);
@@ -155,6 +158,12 @@ struct Scene {
             if (h.HasMember("epsilon"))      hatch.epsilon      = h["epsilon"].GetDouble();
             if (h.HasMember("min_color"))    hatch.min_hatch_col = read_col(h["min_color"]);
             if (h.HasMember("max_color"))    hatch.max_hatch_col = read_col(h["max_color"]);
+        }
+
+        if (doc.HasMember("canvas")) {
+            const auto& c = doc["canvas"];
+            if (c.HasMember("width"))  canvas_w = c["width"].GetDouble();
+            if (c.HasMember("height")) canvas_h = c["height"].GetDouble();
         }
 
         if (doc.HasMember("light_direction"))

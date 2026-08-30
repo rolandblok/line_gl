@@ -9,6 +9,7 @@
 #include "svg.h"
 #include "vec_math.h"
 #include "hatch.h"
+#include "clip.h"
 
 [[maybe_unused]] static Scene make_xyz_axis_scene() {
     Scene s;
@@ -19,13 +20,13 @@
 }
 
 int main(int argc, char* argv[]) {
-    const double W = 800.0f, H = 600.0f;
-
     Scene xyz = make_xyz_axis_scene();
 
     std::filesystem::create_directories("svg");
 
     auto render = [&](Scene& scene, const std::string& scene_path, bool debug = false) {
+        // Canvas size comes from the scene ("canvas": {...}), default 800x600.
+        const double W = scene.canvas_w, H = scene.canvas_h;
         Camera& cam = scene.cam;
         Mat4 view = cam.view();
         const Mat4* view_mat = (cam.proj_mode == ProjectionMode::Orthographic) ? &view : nullptr;
@@ -39,7 +40,10 @@ int main(int argc, char* argv[]) {
         std::vector<Vec3> crossings;
         auto pscene  = project_scene_full(scene, mvp, W, H, view_mat);
         if (scene.show_intersection_lines) add_triangle_intersection_lines(pscene);
-        auto lines2d = hidden_line_removal(pscene, debug, &crossings);
+        // Scenes may extend past the frame on purpose; drop what is off-canvas
+        // so the SVG bounding box stays the canvas (svg_to_gcode scales to it).
+        auto lines2d = clip_to_canvas(
+            hidden_line_removal(pscene, debug, &crossings), W, H);
         std::cout << out << ": " << lines2d.size() << " segments\n";
 
         SvgWriter svg(out.c_str(), W, H);

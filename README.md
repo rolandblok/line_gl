@@ -13,13 +13,15 @@ make
 bin/line_gl [scene.json ...]   # renders all scenes/**.json when no args given
 ```
 
-Outputs go to `svg/`.
+Outputs go to `svg/`. Segments falling outside the 800x600 canvas are clipped
+away, so the SVG bounding box never grows past the frame.
 
 ## Scene format (JSON)
 
 ```json
 {
     "camera": { "position":[x,y,z], "target":[x,y,z], "projection":"orthographic", "ortho_height":5.0 },
+    "canvas": { "width": 800, "height": 600 },
     "light_direction": [x, y, z],
     "show_intersection_lines": true,
     "lines":      [{ "a":[x,y,z], "b":[x,y,z], "col":[r,g,b] }],
@@ -29,6 +31,7 @@ Outputs go to `svg/`.
 }
 ```
 
+`canvas` (default `800x600`) sets the output SVG size in px and therefore the projection's aspect ratio — use it for portrait scenes.  
 `show_intersection_lines` (default `true`) controls whether triangle-plane intersection lines are drawn. Set to `false` for smooth meshes like spheres or terrain.  
 `show_edges` on a rectangle is `[ab, bc, cd, da]` — each `0` or `1`.
 
@@ -44,6 +47,20 @@ python scripts/gen_heightfield.py [--size N] [--roughness R] [--seed S] [--heigh
 | `gen_sphere.py` | Icosphere (subdivided icosahedron) — equal-size triangles | `scenes/sphere.json` |
 | `gen_heightfield.py` | Diamond-square (plasma) — randomised terrain | `scenes/heightfield.json` |
 | `gen_menger.py` | Menger sponge — recursive cube subdivision | `scenes/postcard_menger.json` |
+| `citybuilder/gen_city.py` | Isometric city — road grid + pluggable building models | `scenes/city.json` |
+
+```sh
+python scripts/citybuilder/gen_city.py [--grid N] [--density D] [--seed S] [--models a,b] [--no-roads] [--out PATH]
+python scripts/citybuilder/gen_city.py --list-models
+```
+
+Roads and pavement are laid out first and decide where buildings may stand:
+crossings stay clear of pavement, corridors can close off into dead ends, and
+each block is diced into plots so it holds several buildings. The camera is framed on the `--grid` city,
+then the grid grows outwards until the city fills the frame edge to edge, on a
+portrait canvas with hatched shading. Models live in
+`scripts/citybuilder/models/` and are auto-discovered — see
+[scripts/citybuilder/README.md](scripts/citybuilder/README.md) for how to add one.
 
 ## G-code export (pen plotter)
 
