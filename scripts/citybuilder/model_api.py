@@ -8,7 +8,7 @@ kind of thing standing on a grid cell (a house, a skyscraper, a tree, ...).
 Each model module must define:
 
     NAME     = "box"                  # unique name, used on the command line
-    WEIGHT   = 1.0                    # optional, relative pick probability
+    DENSITY  = 0.6                    # optional, share of plots this model gets
     DEFAULTS = {"min_height": 0.4}    # optional, tunable parameters
     def build(lot: Lot) -> Geometry:  # required
         ...
@@ -30,10 +30,25 @@ Vec3 = Sequence[float]
 
 BLACK = [0, 0, 0]
 
-# All 12 block edges visible / bottom ring hidden (a building standing on the
-# ground rarely needs its bottom edges, they sit inside the ground plane).
+# show_edges on a block is 12 flags, and they are *not* grouped by ring: the
+# renderer walks the z=0 face (0-3), the z=dz face (4-7), then the four edges
+# joining them (8-11), so each group mixes heights. These masks pick out the
+# rings properly - see add_block in include/scene.h for the vertex order.
+EDGES_BOTTOM = (0, 4, 8, 9)     # the ring at y = origin.y
+EDGES_TOP = (2, 6, 10, 11)      # the ring at y = origin.y + dy
+EDGES_VERTICAL = (1, 3, 5, 7)   # the four corner posts
+
+
+def edges_without(*rings):
+    """All 12 edges on, minus the given rings: edges_without(EDGES_BOTTOM)."""
+    off = {i for ring in rings for i in ring}
+    return [0 if i in off else 1 for i in range(12)]
+
+
 EDGES_ALL = [1] * 12
-EDGES_NO_BOTTOM = [0, 0, 0, 0] + [1] * 8
+# A building standing on the ground rarely needs its bottom edges - they sit
+# inside the ground plane.
+EDGES_NO_BOTTOM = edges_without(EDGES_BOTTOM)
 
 
 @dataclass

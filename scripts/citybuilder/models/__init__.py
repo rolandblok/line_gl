@@ -24,7 +24,8 @@ from model_api import Geometry, Lot  # noqa: E402
 class ModelSpec:
     name: str
     build: Callable[[Lot], Geometry]
-    weight: float = 1.0
+    density: float = 0.3          # module DENSITY: share of plots this model gets
+    weight: float = 1.0           # multiplier from `--models name:weight`
     defaults: dict[str, Any] = field(default_factory=dict)
     doc: str = ""
     path: Path = _HERE
@@ -59,7 +60,7 @@ def load_models(directory: Path | None = None) -> dict[str, ModelSpec]:
         models[name] = ModelSpec(
             name=name,
             build=build,
-            weight=float(getattr(module, "WEIGHT", 1.0)),
+            density=float(getattr(module, "DENSITY", 0.3)),
             defaults=dict(getattr(module, "DEFAULTS", {})),
             doc=(module.__doc__ or "").strip().splitlines()[0] if module.__doc__ else "",
             path=path,

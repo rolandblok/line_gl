@@ -20,7 +20,8 @@ Usage:
 Options of note:
     --grid N          N x N lots the camera is framed on (default 5)
     --cell S          world size of one lot (default 1.0)
-    --density D       chance a lot is built on, 0..1 (default 0.6)
+    --density-NAME D  share of plots that get that model, 0..1 (one per model)
+    --density D       overall fill: rescale the whole mix to this total
     --models a,b      restrict/weight the models used (default: all discovered)
     --seed S          reproducible layout
     --no-extend       keep exactly N x N lots, leaving the frame corners empty
@@ -28,8 +29,16 @@ Options of note:
     --plots N         split each block into 1..N plots per axis (default 3)
     --dead-ends F     chance a road corridor is closed off (default 0.15)
     --no-roads        skip the road/pavement layout
-    --config FILE     JSON with per-model parameter overrides:
-                          { "box": { "max_height": 4.0 } }
+    --config FILE     extra config file, layered on the auto-loaded one
+    --no-config       ignore city_config.json, use the built-in defaults
+    --dump-config     print the settings in force as JSON and exit
+
+Settings come from three places, each overriding the one before it: the
+built-in defaults, `scripts/citybuilder/city_config.json` if it exists (plus
+any `--config FILE`), and finally the command line. A config file holds option
+names and an optional `model_params` block:
+
+    { "density": 0.85, "grid": 6, "model_params": { "box": { "max_height": 4.0 } } }
 
 World convention: +Y is up, the ground is the XZ plane at y = 0, the city is
 centred on the origin.
@@ -40,6 +49,7 @@ import json
 import math
 import random
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -55,6 +65,15 @@ DEFAULT_CANVAS = (600.0, 800.0)
 # True isometric: yaw 45 deg, pitch atan(1/sqrt(2)) = 35.264 deg -> view dir (1,1,1).
 ISO_AZIMUTH = 45.0
 ISO_ELEVATION = math.degrees(math.atan(1.0 / math.sqrt(2.0)))
+
+# Picked up automatically when it sits next to this script; --no-config skips it.
+CONFIG_PATH = Path(__file__).resolve().parent / "city_config.json"
+
+# Config keys spelled as the negative flag, mapped to the option they invert.
+NEGATED = {"no_roads": "roads", "no_hatch": "hatch", "no_extend": "extend"}
+
+# Options that only make sense on the command line.
+NOT_CONFIGURABLE = {"config", "no_config", "dump_config", "list_models"}
 
 
 # ---------------------------------------------------------------------------
@@ -88,16 +107,45 @@ def _norm(a):
 # City layout
 # ---------------------------------------------------------------------------
 
-def pick_model(models, rng):
-    """Weighted pick from the selected models."""
-    total = sum(m.weight for m in models)
-    r = rng.uniform(0.0, total)
+def pick_model(models, densities, rng):
+    """Which model lands on this plot, or None to leave it empty.
+
+    One draw decides both questions at once: the models take slices of [0, 1)
+    the size of their own density, and whatever is left over is open ground.
+    """
+    r = rng.random()
     upto = 0.0
     for m in models:
-        upto += m.weight
-        if r <= upto:
+        upto += densities[m.name]
+        if r < upto:
             return m
-    return models[-1]
+    return None
+
+
+def resolve_densities(models, args):
+    """Per-model chance that any given plot gets that model.
+
+    Each model brings its own default (its module DENSITY); --density-NAME or
+    the matching config key overrides it, --models NAME:w scales it, and
+    --density, when given at all, rescales the whole mix to that total fill.
+    """
+    out = {}
+    for m in models:
+        override = getattr(args, "density_" + m.name.replace("-", "_"), None)
+        base = m.density if override is None else float(override)
+        out[m.name] = max(0.0, base * m.weight)
+
+    total = sum(out.values())
+    if args.density is not None:
+        if total <= 0.0:
+            raise SystemExit("every model has density 0, --density has nothing to scale")
+        out = {k: v * args.density / total for k, v in out.items()}
+        total = args.density
+    if total > 1.0:
+        print(f"warning: model densities add up to {total:.2f} - scaled back to 1.0",
+              file=sys.stderr)
+        out = {k: v / total for k, v in out.items()}
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +205,7 @@ def corridor_closed(args, axis, ix, iz):
     """
     if args.dead_ends <= 0.0:
         return False
-    return random.Random((args.seed, "road", axis, ix, iz)).random() < args.dead_ends
+    return random.Random(f"{args.seed}:road:{axis}:{ix}:{iz}").random() < args.dead_ends
 
 
 def tile_filled(args, cells, jx, jz):
@@ -279,7 +327,7 @@ def block_plots(args, ix, iz):
     x0, z0, size = x0 + pave, z0 + pave, size - 2.0 * pave
     if size <= 0.0:
         return
-    rng = random.Random((args.seed, "plots", ix, iz))
+    rng = random.Random(f"{args.seed}:plots:{ix}:{iz}")
     nx = rng.randint(1, max(args.plots, 1))
     nz = rng.randint(1, max(args.plots, 1))
     for kz in range(nz):
@@ -287,18 +335,20 @@ def block_plots(args, ix, iz):
             yield (x0 + size * kx / nx, z0 + size * kz / nz, size / nx, size / nz)
 
 
-def build_block(models, params, args, ix, iz):
+def build_block(models, densities, params, args, ix, iz):
     """Build every plot of one block. Yields (spec, geometry) per building.
 
     The rng is seeded per plot, so a plot always looks the same no matter how
     far the grid is extended around it - the inner city does not reshuffle when
-    the outskirts grow.
+    the outskirts grow. Seeds are strings: random.Random hashes a tuple, and
+    tuple hashing is salted per process (and rejected outright since 3.11), so
+    a tuple seed would make --seed meaningless.
     """
     for k, (px, pz, sx, sz) in enumerate(block_plots(args, ix, iz)):
-        rng = random.Random((args.seed, ix, iz, k))
-        if rng.random() >= args.density:
+        rng = random.Random(f"{args.seed}:lot:{ix}:{iz}:{k}")
+        spec = pick_model(models, densities, rng)
+        if spec is None:
             continue
-        spec = pick_model(models, rng)
         lot = Lot(ix=ix, iz=iz, plot=k, x0=px, z0=pz, sx=sx, sz=sz,
                   y=0.0, rng=rng, params=params[spec.name])
         piece = spec.build(lot)
@@ -306,7 +356,7 @@ def build_block(models, params, args, ix, iz):
             yield spec, piece
 
 
-def build_city(models, params, args):
+def build_city(models, densities, params, args):
     """Lay out the city; return the world geometry, the camera and stats.
 
     Order of work, which is also the order the primitives end up in the scene:
@@ -326,7 +376,7 @@ def build_city(models, params, args):
     buildings = Geometry()
     gid = 0
     for ix, iz in nominal_cells:
-        for spec, piece in build_block(models, params, args, ix, iz):
+        for spec, piece in build_block(models, densities, params, args, ix, iz):
             piece.stamp_group(gid)             # no seam lines inside one building
             gid += 1
             buildings.extend(piece)
@@ -349,7 +399,7 @@ def build_city(models, params, args):
         # only closes when the blocks on both sides of it exist.
         roads = build_roads(args, nominal_cells + outer, view)
         for ix, iz in outer:
-            for spec, piece in build_block(models, params, args, ix, iz):
+            for spec, piece in build_block(models, densities, params, args, ix, iz):
                 if not view.contains(piece.vertices()):
                     continue                   # projects entirely off-canvas
                 piece.stamp_group(gid)
@@ -557,14 +607,102 @@ def resolve_params(models, config):
 
 
 def parse_canvas(text):
-    """`600x800` -> (600.0, 800.0)."""
+    """`600x800` -> (600.0, 800.0). A JSON config may also give `[600, 800]`."""
     try:
-        w, h = (float(v) for v in str(text).lower().split("x"))
+        parts = text if isinstance(text, (list, tuple)) else str(text).lower().split("x")
+        w, h = (float(v) for v in parts)
         if w <= 0 or h <= 0:
             raise ValueError
-    except ValueError:
+    except (ValueError, TypeError):
         raise SystemExit(f"--canvas expects WxH in px, got '{text}'")
     return w, h
+
+
+def _short(path):
+    """Path relative to the working directory when that is shorter."""
+    try:
+        rel = Path(path).resolve().relative_to(Path.cwd())
+        return str(rel)
+    except ValueError:
+        return str(path)
+
+
+def load_config(path, known, extra_ok=False):
+    """Read one config file -> (option defaults, per-model parameter overrides).
+
+    `extra_ok` keeps unrecognised option keys instead of rejecting them, for
+    tools that share this file but only understand part of it (gen_model.py).
+
+    Keys are option names, with `-` or a leading `--` allowed instead of `_`,
+    so `"dead_ends"` and `"--dead-ends"` land on the same option. Per-model
+    parameters go under `"model_params"`; a bare `{"box": {...}}` at the top
+    level is still understood, which is what --config took before.
+    """
+    try:
+        raw = json.loads(Path(path).read_text())
+    except FileNotFoundError:
+        raise SystemExit(f"config: no such file '{path}'")
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path}: invalid JSON - {exc}")
+    if not isinstance(raw, dict):
+        raise SystemExit(f"{path}: top level must be a JSON object")
+
+    opts, model_params = {}, {}
+    for key, value in raw.items():
+        name = str(key).lstrip("-").replace("-", "_")
+        if name == "model_params":
+            if not isinstance(value, dict):
+                raise SystemExit(f"{path}: 'model_params' must be an object")
+            for model, over in value.items():
+                model_params.setdefault(model, {}).update(over)
+        elif name in NEGATED:
+            opts[NEGATED[name]] = not value
+        elif name in NOT_CONFIGURABLE:
+            print(f"warning: {path}: '{key}' is command line only - ignored",
+                  file=sys.stderr)
+        elif name in known:
+            opts[name] = value
+        elif isinstance(value, dict):
+            model_params.setdefault(key, {}).update(value)   # legacy per-model form
+        elif extra_ok:
+            opts[name] = value                               # the other tool's key
+        else:
+            raise SystemExit(f"{path}: unknown option '{key}'")
+    return opts, model_params
+
+
+def read_configs(explicit, use_default, known, extra_ok=False):
+    """Layer the auto-loaded file, then --config. Later files win."""
+    sources = []
+    if use_default and CONFIG_PATH.exists():
+        sources.append(CONFIG_PATH)
+    if explicit:
+        sources.append(Path(explicit))
+
+    opts, model_params = {}, {}
+    for src in sources:
+        file_opts, file_models = load_config(src, known, extra_ok)
+        opts.update(file_opts)
+        for model, over in file_models.items():
+            model_params.setdefault(model, {}).update(over)
+    return opts, model_params, sources
+
+
+def dump_config(args, available, model_params, known):
+    """The settings in force, as a config file, so they can be saved and re-used."""
+    out = {k: v for k, v in sorted(vars(args).items())
+           if k in known and k not in NOT_CONFIGURABLE}
+    # Per-model densities are written out resolved rather than as null, so the
+    # file shows the numbers a reader would otherwise have to go and look up.
+    for spec in available.values():
+        key = "density_" + spec.name.replace("-", "_")
+        if out.get(key) is None:
+            out[key] = spec.density
+    out["canvas"] = f"{args.canvas[0]:g}x{args.canvas[1]:g}"
+    out["light"] = list(args.light)
+    out["hatch_spacing"] = list(args.hatch_spacing)
+    out["model_params"] = model_params
+    print(json.dumps(out, indent=4))
 
 
 def select_models(available, selection):
@@ -582,8 +720,7 @@ def select_models(available, selection):
                              + (", ".join(available) or "(none)"))
         spec = available[name]
         if weight:
-            spec = ModelSpec(spec.name, spec.build, float(weight), spec.defaults,
-                             spec.doc, spec.path)
+            spec = replace(spec, weight=float(weight))
         chosen.append(spec)
     if not chosen:
         raise SystemExit("--models selected nothing")
@@ -591,6 +728,8 @@ def select_models(available, selection):
 
 
 def main():
+    available = load_models()
+
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--grid", type=int, default=5,
@@ -612,13 +751,20 @@ def main():
     parser.add_argument("--plots", type=int, default=3,
                         help="a block is split into 1..N plots per axis, so up to "
                              "NxN buildings per block (default 3)")
-    parser.add_argument("--density", type=float, default=0.6,
-                        help="chance a lot gets a building, 0..1 (default 0.6)")
+    parser.add_argument("--density", type=float, default=None,
+                        help="overall fill: rescale every model density so they add "
+                             "up to this, 0..1 (default: leave them as they are)")
     parser.add_argument("--seed", type=int, default=42, help="random seed (default 42)")
     parser.add_argument("--models", type=str, default=None,
                         help="comma list of models, optional :weight (default: all)")
     parser.add_argument("--config", type=str, default=None,
-                        help="JSON file with per-model parameter overrides")
+                        help="extra config file, layered on top of "
+                             f"{CONFIG_PATH.name} if that exists")
+    parser.add_argument("--no-config", dest="no_config", action="store_true",
+                        help=f"ignore {CONFIG_PATH.name} and use the built-in defaults")
+    parser.add_argument("--dump-config", action="store_true",
+                        help="print the settings in force as JSON and exit; redirect "
+                             f"into {CONFIG_PATH.name} to make them the defaults")
     parser.add_argument("--list-models", action="store_true",
                         help="print the discovered models with their parameters and exit")
     parser.add_argument("--ground", action="store_true",
@@ -654,39 +800,65 @@ def main():
                         help="extra zoom factor; >1 zooms out (default 1.0)")
     parser.add_argument("--out", type=str, default="scenes/city.json",
                         help="output scene path (default scenes/city.json)")
+    # One per discovered model, so a new model file brings its own knob with it.
+    for spec in available.values():
+        parser.add_argument(f"--density-{spec.name}", type=float, default=None,
+                            metavar="D",
+                            help=f"share of plots that get a {spec.name}, 0..1 "
+                                 f"(default {spec.density:g})")
+    # Defaults < config file < command line. set_defaults slides the config
+    # values in underneath argparse, so anything typed still overrides them.
+    known = set(vars(parser.parse_args([])))
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config")
+    pre.add_argument("--no-config", dest="no_config", action="store_true")
+    pre_args, _ = pre.parse_known_args()
+    file_opts, model_params, sources = read_configs(
+        pre_args.config, not pre_args.no_config, known)
+    parser.set_defaults(**file_opts)
+
     args = parser.parse_args()
     args.canvas = parse_canvas(args.canvas)
-
-    available = load_models()
 
     if args.list_models:
         if not available:
             print("no models found in scripts/citybuilder/models/")
         for spec in available.values():
-            print(f"{spec.name}  (weight {spec.weight:g})  [{spec.path.name}]")
+            print(f"{spec.name}  (density {spec.density:g})  [{spec.path.name}]")
             if spec.doc:
                 print(f"    {spec.doc}")
             for k, v in spec.defaults.items():
                 print(f"    {k:<16} = {v}")
         return
 
+    if args.dump_config:
+        dump_config(args, available, model_params, known)
+        return
+
     if not available:
         raise SystemExit("no models found in scripts/citybuilder/models/")
 
-    models = select_models(available, args.models)
-    config = json.loads(Path(args.config).read_text()) if args.config else {}
-    params = resolve_params(models, config)
+    strays = sorted(set(model_params) - set(available))
+    if strays:
+        print(f"warning: config has parameters for unknown model(s) {strays}",
+              file=sys.stderr)
 
-    geo, cam, stats = build_city(models, params, args)
+    models = select_models(available, args.models)
+    params = resolve_params(models, model_params)
+    densities = resolve_densities(models, args)
+
+    geo, cam, stats = build_city(models, densities, params, args)
     if geo.is_empty() or cam is None:
-        raise SystemExit("nothing was generated - raise --density or check the models")
+        raise SystemExit("nothing was generated - raise a --density-NAME or check "
+                         "the models")
     scene = build_scene(geo, cam, args)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(scene, indent=4))
 
-    used = ", ".join(f"{n}:{c}" for n, c in stats["per_model"].items() if c)
+    used = ", ".join(f"{n}:{c} ({densities[n]:.0%})"
+                     for n, c in stats["per_model"].items() if c)
     inner = stats["buildings"] - stats["extra"]
     print(f"{inner} buildings on the {args.grid}x{args.grid} grid of blocks, "
           f"+{stats['extra']} outside it to fill the frame ({used})")
@@ -696,6 +868,8 @@ def main():
     print(f"Camera: azimuth {args.azimuth:g}, elevation {stats['elevation']:.3f} deg, "
           f"canvas {args.canvas[0]:g}x{args.canvas[1]:g} px"
           f"{'' if args.hatch else ', no hatching'}")
+    if sources:
+        print("Config: " + ", ".join(_short(s) for s in sources))
     print(f"Written {len(geo)} primitives to {out_path}")
 
 

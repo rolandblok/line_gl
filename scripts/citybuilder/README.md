@@ -14,6 +14,9 @@ the plot fills the paper. `--no-extend` turns the growing off.
 python scripts/citybuilder/gen_city.py            # -> scenes/city.json (portrait, shaded)
 bin/line_gl scenes/city.json                      # -> svg/city.svg
 python scripts/svg_to_gcode.py svg/city.svg       # -> gcode/city.gcode
+
+python scripts/citybuilder/gen_model.py factory   # -> scenes/model.json, one building
+bin/line_gl scenes/model.json                     # -> svg/model.svg
 ```
 
 ## Layout
@@ -21,10 +24,12 @@ python scripts/svg_to_gcode.py svg/city.svg       # -> gcode/city.gcode
 ```
 scripts/citybuilder/
     gen_city.py     road layout, model picking, camera framing, scene writing
+    gen_model.py    one model on an empty plot, filling the page, for inspection
     model_api.py    Lot + Geometry: what a model receives and what it returns
     models/
         __init__.py model discovery (every *.py here is auto-registered)
         box.py      simplest model: one box per lot
+        factory.py  hall + tiled gable roof + cylinder chimney
 ```
 
 World convention, same as the rest of line_gl: **+Y is up**, the ground is the
@@ -42,10 +47,13 @@ XZ plane at `y = 0`, and the city is centred on the origin.
 | `--dead-ends F` | chance a road corridor is closed off, default 0.15 |
 | `--no-roads` | skip the road/pavement layout entirely |
 | `--road-dashes N` | centre markings per road segment, 0 = none (default 3) |
-| `--density D` | chance a lot gets a building, default 0.6 |
+| `--density-NAME D` | share of plots that get that model, one flag per model |
+| `--density D` | overall fill: rescale the whole mix to this total |
 | `--seed S` | reproducible layout |
 | `--models a,b:3` | which models to use, optional `:weight` |
-| `--config FILE` | JSON with per-model parameter overrides |
+| `--config FILE` | extra config file, layered on top of `city_config.json` |
+| `--no-config` | ignore `city_config.json` and use the built-in defaults |
+| `--dump-config` | print the settings in force as JSON and exit |
 | `--list-models` | show discovered models and their parameters |
 | `--no-extend` | do not grow the grid past `--grid` (leaves empty corners) |
 | `--max-lots N` | safety cap on lots visited while extending (default 20000) |
@@ -68,6 +76,103 @@ whose projection misses the frame entirely.
 
 Each lot is seeded from `(seed, ix, iz)`, so a lot always looks the same however
 far the grid grows - raising `--grid` extends the city instead of reshuffling it.
+
+## Models and how often they appear
+
+| Model | Default density | What it draws |
+|---|---|---|
+| `box` | 0.6 | one axis-aligned box per plot |
+| `factory` | 0.08 | a hall under a tiled gable roof, usually with a chimney |
+
+Every model carries its own frequency, declared as `DENSITY` in its module and
+overridable per model:
+
+```sh
+python scripts/citybuilder/gen_city.py --density-factory 0.25   # an industrial quarter
+python scripts/citybuilder/gen_city.py --density-box 0          # factories only
+```
+
+A density is the **share of all plots** that get that model, so they add up:
+the defaults leave `0.6 + 0.08 = 0.68` of plots built and the remaining 32%
+open. If the total goes over 1.0 it is scaled back and a warning is printed.
+
+`--density` no longer decides on its own whether a plot is built - it is now an
+optional **overall fill** that rescales the whole mix while keeping its
+proportions. `--density 0.9` fills 90% of plots at the same box-to-factory
+ratio. Left unset, each model simply uses its own number.
+
+`--models NAME:w` still works and multiplies that model's density, so
+`--models box,factory:3` triples how often a factory turns up.
+
+### factory
+
+The ridge runs along the hall's long axis, so the gable ends stay narrow. The
+roof slopes carry `tile_rows` courses of tiles, drawn a hair off the surface -
+coplanar lines are exactly what `--ground-drop` exists to avoid.
+
+`eaves` overhangs the eaves only; the verges stay flush with the gable. That is
+not just a style choice: an overhanging verge puts the gable's rake *inside* the
+slope rather than along its edge, and a crease lying in the middle of a surface
+gets drawn - so the far gable appears through the roof. Flush, the slope's own
+side edge is the rake, and it is right from every angle. The chimney is
+an N-sided prism standing in for a cylinder (`chimney_facets`, default 8);
+hidden-line removal hides its back edges, so it reads as round. It stands free
+beside one gable end, and the hall gives up that strip of the plot to make room
+for it.
+
+The top is open: `flue` cuts a real recess into the crown - a rim of brick, the
+wall down the shaft, a floor - rather than drawing a ring on a solid cap. The
+mouth is then a genuine silhouette edge and the far wall down the hole picks up
+the hatching. `flue_width` sets the opening as a fraction of the top radius
+(default 0.6); `flue: false` caps it over solid.
+
+Its parameters are tuned like any other model's, through `model_params`:
+
+```json
+{ "model_params": { "factory": { "chimney_chance": 1.0, "tile_rows": 6 } } }
+```
+
+## Inspecting one model
+
+A building is about 40 px of a city, which is no way to judge whether a roof
+line is right. `gen_model.py` builds a single instance on an empty plot and
+frames the camera on it, reusing `gen_city.py`'s camera, light and hatching
+code - so what it draws is what the city will draw.
+
+```sh
+python scripts/citybuilder/gen_model.py factory
+bin/line_gl scenes/model.json        # -> svg/model.svg
+```
+
+| Flag | Meaning |
+|---|---|
+| `--seed S` | which instance you get; step through a few before judging a model |
+| `--param NAME=VALUE` | override one of the model's `DEFAULTS` for this run, repeatable (`-p`) |
+| `--size SX SZ` | the plot handed to the model, default `1 1` |
+| `--ground` | draw a ground plane under it |
+| `--canvas`, `--margin`, `--zoom` | framing, default `600x600` and a little slack |
+| `--no-hatch`, `--hatch-spacing`, `--shade-cutoff`, `--light` | shading, same defaults as the city |
+| `--out PATH` | default `scenes/model.json` |
+
+```sh
+python scripts/citybuilder/gen_model.py factory --seed 7
+python scripts/citybuilder/gen_model.py factory -p chimney_chance=1 -p tile_rows=8
+python scripts/citybuilder/gen_model.py box --size 1.0 0.4 --ground
+```
+
+`--size` is worth using: a plot is a slice of a block and is rarely square, and
+a model that only ever gets tested on `1 1` will look wrong the moment the city
+hands it a `1.0 0.4` strip.
+
+`city_config.json` is read here too, but only for `model_params` and the
+camera/light/hatch settings. Framing and everything about laying out a city -
+grid, roads, plots, densities, `--out` - is ignored, since none of it means
+anything to a single building.
+
+One caveat: hatch spacing is in px **on the page**, exactly as in the city. A
+building blown up to fill the sheet therefore gets far more hatch lines across
+it than it ever gets in a city, so raise `--hatch-spacing` if you want to judge
+the shading as it will actually plot.
 
 ## Roads and pavement
 
@@ -128,15 +233,62 @@ lower them for a darker one.
 The canvas is portrait by default (`600x800`); it is written into the scene as
 `"canvas"`, so the renderer projects and writes the SVG at that size.
 
-Per-model parameters are overridden with a config file:
+## Configuration
+
+Every option above can live in a JSON file instead of on the command line.
+Settings are resolved in three layers, each overriding the one before it:
+
+```
+built-in defaults  <  city_config.json (then any --config FILE)  <  command line
+```
+
+`scripts/citybuilder/city_config.json` is picked up automatically whenever it
+exists - no flag needed. Keys are the option names without the leading dashes;
+`-` and `_` are interchangeable, so `"dead-ends"` and `"dead_ends"` both work.
+Per-model parameters go under `model_params`:
 
 ```json
-{ "box": { "max_height": 4.0, "min_footprint": 0.7 } }
+{
+    "grid": 6,
+    "density_box": 0.45,
+    "density_factory": 0.2,
+    "dead-ends": 0.2,
+    "canvas": "600x800",
+    "model_params": {
+        "box": { "max_footprint": 0.95, "min_footprint": 0.7 },
+        "factory": { "chimney_chance": 1.0 }
+    }
+}
 ```
+
+The three negative flags are written either way round - `"roads": false` and
+`"no_roads": true` mean the same thing. `canvas` takes `"600x800"` or
+`[600, 800]`. An unrecognised key is an error rather than a silent no-op.
+
+Anything typed on the command line still wins, so the config file sets the
+house style and a flag overrides it for one run:
+
+```sh
+python scripts/citybuilder/gen_city.py                  # config file's density
+python scripts/citybuilder/gen_city.py --density 0.3    # overridden for this run
+python scripts/citybuilder/gen_city.py --no-config      # built-in defaults
+```
+
+`--dump-config` prints the settings actually in force, which is both a way to
+see what a run resolved to and a way to seed the file in the first place:
+
+```sh
+python scripts/citybuilder/gen_city.py --no-config --dump-config     > scripts/citybuilder/city_config.json
+```
+
+`--config FILE` still accepts the old per-model-only form, `{ "box": { ... } }`,
+and layers on top of `city_config.json`.
 
 ## Writing a new model
 
-Drop a `*.py` file in `models/`. It is picked up automatically.
+Drop a `*.py` file in `models/`. It is picked up automatically, and it brings
+its own `--density-NAME` flag and config key with it - nothing in `gen_city.py`
+needs to know the model exists.
 
 ```python
 """Tower - a box with a thinner box on top."""
@@ -144,8 +296,8 @@ Drop a `*.py` file in `models/`. It is picked up automatically.
 from model_api import Geometry, Lot
 
 NAME = "tower"          # required, unique; used by --models
-WEIGHT = 0.5            # optional, relative pick probability (default 1.0)
-DEFAULTS = {            # optional, tunable via --config
+DENSITY = 0.1           # optional, share of plots it gets (default 0.3)
+DEFAULTS = {            # optional, tunable via model_params
     "height": 3.0,
 }
 
@@ -162,6 +314,8 @@ def build(lot: Lot) -> Geometry:      # required
 `y`), the rng (seeded per plot from `--seed`, so keep all randomness on it) and
 the resolved parameters via `lot.p(name)`.
 
+`gen_model.py tower` will draw it on its own from the moment the file exists.
+
 A plot is a slice of a block and is **not square** - use `sx` and `sz`, not
 `size` (which is only the largest square that fits). Two helpers:
 
@@ -171,7 +325,16 @@ A plot is a slice of a block and is **not square** - use `sx` and `sz`, not
 
 `Geometry` collects primitives in **world** coordinates: `block(origin, dx, dy,
 dz, col, show_edges)`, `rect(a, b, c, d, ...)` and `line(a, b, col)` — the same
-primitives the scene format documents. `show_edges` on a block is the 12-entry
+primitives the scene format documents.
+
+**Wind your quads outwards.** The renderer reads a triangle normal as
+`(b - a) x (c - a)` and back-face culls before hatching, so a `rect` wound the
+wrong way round draws all its edges but is never shaded — it comes out blank
+next to correctly wound faces, which is easy to miss until you look at one
+model on its own. `block` is safe (the renderer builds those itself); `rect` is
+yours to get right. `factory.py` routes every quad through a `_face` helper
+that flips the winding, and the edge flags with it, whenever the normal ends up
+pointing into the solid. `show_edges` on a block is the 12-entry
 list `[bottom x4, top x4, vertical x4]`; leave it out to draw all edges.
 
 Every primitive returned by one `build()` call is stamped with a shared

@@ -84,18 +84,22 @@ struct Scene {
             triangles[i].group_id = gid;
 
         // Edges with parent_tri set to one of the triangles they lie on.
+        // NB: these are grouped by *face*, not by height - 0-3 walk the z=0
+        // face, 4-7 the z=dz face, 8-11 join the two. So each group mixes
+        // horizontal and vertical edges; the y=0 ring is {0,4,8,9}, the y=dy
+        // ring is {2,6,10,11} and the corner posts are {1,3,5,7}.
         auto e = [&](int i) { return !show_edges || show_edges[i]; };
-        // bottom edges (0-3)
+        // z = 0 face (0-3)
         if (e(0)) add_line(v[0], v[1], col, base+1);
         if (e(1)) add_line(v[1], v[2], col, base+1);
         if (e(2)) add_line(v[2], v[3], col, base+0);
         if (e(3)) add_line(v[3], v[0], col, base+0);
-        // top edges (4-7)
+        // z = dz face (4-7)
         if (e(4)) add_line(v[4], v[5], col, base+2);
         if (e(5)) add_line(v[5], v[6], col, base+2);
         if (e(6)) add_line(v[6], v[7], col, base+3);
         if (e(7)) add_line(v[7], v[4], col, base+3);
-        // vertical edges (8-11)
+        // edges joining the two faces (8-11)
         if (e(8))  add_line(v[0], v[4], col, base+5);
         if (e(9))  add_line(v[1], v[5], col, base+4);
         if (e(10)) add_line(v[2], v[6], col, base+7);

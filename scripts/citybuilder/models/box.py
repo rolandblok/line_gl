@@ -4,7 +4,7 @@
 from model_api import EDGES_ALL, EDGES_NO_BOTTOM, Geometry, Lot
 
 NAME = "box"
-WEIGHT = 1.0
+DENSITY = 0.6           # share of all plots that get one; see --density-box
 
 DEFAULTS = {
     # Height is a multiple of the footprint's short side, not a world distance:

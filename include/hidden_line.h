@@ -1,4 +1,5 @@
 #pragma once
+#include <cmath>
 #include <vector>
 #include <iostream>
 #include "scene.h"
@@ -37,6 +38,15 @@ hidden_line_removal(const ProjectedScene& scene,
         int tri_idx = 0;
         for (const auto& tri : scene.triangles) {
             if (line.parent_tri == tri_idx) { ++tri_idx; continue; }
+            // A face seen exactly edge-on projects to a sliver of zero area. It
+            // covers nothing, so it cannot hide anything — but its degenerate
+            // barycentrics make the depth of a boundary point meaningless, and
+            // it ends up "occluding" the very edges that lie along it. That is
+            // what eats a box's corner posts at azimuth 0, and the silhouette
+            // of any prism whose facets line up with the camera.
+            const double area2 = std::abs((tri.b.x - tri.a.x) * (tri.c.y - tri.a.y)
+                                        - (tri.c.x - tri.a.x) * (tri.b.y - tri.a.y));
+            if (area2 < 1e-9) { ++tri_idx; continue; }
             if (debug) {
                 std::cerr << "  vs tri[" << tri_idx << "]"
                           << "  A(" << tri.a.x << "," << tri.a.y << ")"

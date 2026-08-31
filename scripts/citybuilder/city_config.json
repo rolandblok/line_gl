@@ -1,0 +1,37 @@
+{
+    "azimuth": 45.0,
+    "canvas": "600x800",
+    "cell": 1.0,
+    "dead_ends": 0.15,
+    "density": null,
+    "density_box": 0.6,
+    "density_factory": 0.08,
+    "elevation": 35.264389682754654,
+    "extend": true,
+    "grid": 5,
+    "ground": false,
+    "ground_drop": 0.001,
+    "hatch": true,
+    "hatch_spacing": [
+        12.0,
+        2.5
+    ],
+    "light": [
+        -0.58,
+        -0.8,
+        -0.05
+    ],
+    "margin": 1.0,
+    "max_lots": 20000,
+    "models": null,
+    "out": "scenes/city.json",
+    "pavement": 0.06,
+    "plots": 3,
+    "road_dashes": 3,
+    "roads": true,
+    "seed": 42,
+    "shade_cutoff": 0.79,
+    "street": 0.25,
+    "zoom": 1.0,
+    "model_params": {}
+}

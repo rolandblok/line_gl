@@ -50,9 +50,18 @@ python scripts/gen_heightfield.py [--size N] [--roughness R] [--seed S] [--heigh
 | `citybuilder/gen_city.py` | Isometric city — road grid + pluggable building models | `scenes/city.json` |
 
 ```sh
-python scripts/citybuilder/gen_city.py [--grid N] [--density D] [--seed S] [--models a,b] [--no-roads] [--out PATH]
+python scripts/citybuilder/gen_city.py [--grid N] [--density-box D] [--density-factory D] [--seed S] [--models a,b] [--no-roads] [--out PATH]
 python scripts/citybuilder/gen_city.py --list-models
+python scripts/citybuilder/gen_model.py factory   # one building, filling the page
 ```
+
+Models are `box` (a plain block) and `factory` (a hall under a tiled gable roof
+with a cylinder chimney); each has its own `--density-NAME` controlling how much
+of the city it makes up.
+
+Any option can also be set in `scripts/citybuilder/city_config.json`, which is
+read automatically when present; the command line overrides it. See
+[scripts/citybuilder/README.md](scripts/citybuilder/README.md#configuration).
 
 Roads and pavement are laid out first and decide where buildings may stand:
 crossings stay clear of pavement, corridors can close off into dead ends, and
